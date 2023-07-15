@@ -1,0 +1,150 @@
+use std::net::{IpAddr, UdpSocket};
+use std::time::Duration;
+use std::{
+	collections::HashMap,
+	net::SocketAddr,
+	sync::{Arc, Mutex},
+};
+
+use anyhow::{anyhow, Context, Result};
+use futures::{
+	prelude::{sink::SinkExt, stream::StreamExt},
+	{AsyncRead, AsyncWrite},
+};
+use futures_channel::mpsc::{unbounded, UnboundedSender};
+use pnet::datalink::NetworkInterface;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::{tungstenite::protocol::Message as WsMessage, WebSocketStream};
+
+use common::*;
+
+pub struct Broadcaster {
+	socket: UdpSocket,
+	pub period: Duration,
+	boardcast_ip: IpAddr,
+}
+
+impl Broadcaster {
+	pub fn new(interface: NetworkInterface, period: Duration) -> Result<Broadcaster> {
+		let ip = interface.ips.iter().find(|i| i.is_ipv4()).unwrap();
+
+		// Bind and connect to the broadcast address
+		let socket = UdpSocket::bind((ip.ip(), 0))?;
+		socket.set_broadcast(true)?;
+
+		Ok(Broadcaster {
+			socket,
+			period,
+			boardcast_ip: ip.broadcast(),
+		})
+	}
+
+	/// Send a single broadcast packet out to the network
+	pub fn broadcast(&self) -> Result<()> {
+		self.socket
+			.send_to(BROADCAST_MSG, (self.boardcast_ip, BROADCAST_PORT))?;
+		Ok(())
+	}
+
+	/// Wait until the next period occurs, this can be used in another thread as a simple way of
+	/// continuously broadcasting the address.
+	pub fn wait(&self) {
+		std::thread::sleep(self.period);
+	}
+}
+
+pub fn default_interface() -> Option<NetworkInterface> {
+	// Check that the interface is, up, not loopback, has an IPv4 address
+	pnet::datalink::interfaces()
+		.iter()
+		.find(|e| e.is_up() && !e.is_loopback() && e.ips.iter().any(|i| i.is_ipv4()))
+		.cloned()
+}
+
+type Tx = UnboundedSender<Message>;
+type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+
+pub struct Server {
+	listener: TcpListener,
+	peer_map: PeerMap,
+	sever_epoch: Instant,
+}
+
+impl Server {
+	pub async fn new(interface: NetworkInterface) -> Result<Self> {
+		let ip = interface.ips.iter().find(|i| i.is_ipv4()).unwrap();
+		let addr = (ip.ip(), SERVER_PORT);
+
+		let socket = TcpListener::bind(addr).await?;
+		log::info!("Sever listening on: {}:{}", addr.0, addr.1);
+
+		let peer_map = Arc::new(Mutex::new(HashMap::new()));
+
+		Ok(Self {
+			listener: socket,
+			peer_map,
+			sever_epoch: Instant::now(),
+		})
+	}
+
+	pub async fn listen(self) {
+		loop {
+			let (stream, addr) = match self.listener.accept().await {
+				Ok(x) => x,
+				Err(err) => {
+					log::error!("Failed to open incoming connection, cause: {:?}", err);
+					continue;
+				}
+			};
+			tokio::spawn(Self::handle_conn(self.peer_map.clone(), stream, addr));
+		}
+	}
+
+	async fn client_handshake(
+		stream: WebSocketStream<TcpStream>,
+		peer_map: PeerMap,
+	) -> Result<WebSocketStream<TcpStream>> {
+		let (outgoing, mut incoming) = stream.split();
+
+		// wait for a client init message
+		let mut init_msg = None;
+		while let Some(msg) = incoming.next().await {
+			match msg.with_context(|| format!("Failed to read message from client"))? {
+				WsMessage::Binary(vec) => {
+					init_msg = Message::parse(&vec[..]).ok();
+					break;
+				}
+				_ => { /* do nothing */ }
+			}
+		}
+		// if nothing, then return an error
+		let init_msg = if let Some(msg) = init_msg {
+			msg
+		} else {
+			return Err(anyhow!("could not read a valid message from client"));
+		};
+
+		Ok(incoming.reunite(outgoing)?)
+	}
+
+	async fn handle_conn(peer_map: PeerMap, raw_stream: TcpStream, addr: SocketAddr) {
+		log::info!("New incoming connection from: {}", addr);
+
+		let ws_stream = match tokio_tungstenite::accept_async(raw_stream).await {
+			Ok(ws) => ws,
+			Err(err) => {
+				log::error!("Failed to connect to client at {}, cause: {:?}", addr, err);
+				return;
+			}
+		};
+		log::info!("Connection established with: {}", addr);
+
+		let _ws_stream = Self::client_handshake(ws_stream, peer_map).await.unwrap();
+
+		// // Insert the tx part
+		// let (tx, rx) = unbounded();
+		// peer_map.lock().unwrap().insert(addr, tx);
+
+		// let (outgoing, incoming) = ws_stream.split();
+	}
+}

@@ -1,0 +1,13 @@
+[package]
+name = "pros-usb-serial-test"
+version = "0.1.0"
+authors = ["serxka <serxka@protonmail.com>"]
+edition = "2021"
+
+[dependencies]
+libc = { version = "0.2", default-features = false }
+pros = { git = "https://github.com/serxka/pros-rs", rev = "136c18b" }
+pros-sys = { git = "https://github.com/serxka/pros-sys" }
+cobs = { path = "../../cobs" }
+
+[workspace]

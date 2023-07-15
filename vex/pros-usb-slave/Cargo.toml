@@ -1,0 +1,14 @@
+[package]
+name = "pros-usb-slave"
+version = "0.1.0"
+authors = ["serxka <serxka@protonmail.com>"]
+edition = "2021"
+
+[dependencies]
+cobs = { path = "../../cobs" }
+libc = { version = "0.2", default-features = false }
+pros = { git = "https://github.com/serxka/pros-rs" }
+pros-sys = { git = "https://github.com/serxka/pros-sys" }
+protocol = { path = "../protocol" }
+
+[workspace]
