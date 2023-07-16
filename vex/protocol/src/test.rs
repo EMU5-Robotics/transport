@@ -126,6 +126,22 @@ fn packet3_de_serialise() {
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 			][..],
 		),
+		(
+			{
+				let mut pkt = Packet3::default();
+				pkt.state = CompetitionState::User;
+				pkt.set_encoder(12, 400);
+				pkt
+			},
+			{
+				let mut layout = Layout::default();
+				layout.ports[12] = PortState::Encoder;
+				layout
+			},
+			&[
+				0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x90,
+			][..],
+		),
 	];
 
 	let mut buf = vec![0; 128];
@@ -153,6 +169,22 @@ fn packet3_de_serialise() {
 	layout.ports[2] = PortState::Motor;
 	let res = Packet3::deserialise(&layout, bytes);
 	assert_eq!(res, Err(Error::BadPacket));
+}
+
+#[test]
+fn packet3_from_layout() {
+	let mut layout = Layout::default();
+	layout.ports[12] = PortState::Encoder;
+	let actual = Packet3::from_layout(&layout);
+
+	let expected = {
+		let mut pkt = Packet3::default();
+		pkt.state = CompetitionState::Unknown;
+		pkt.encoders[12] = Some(0);
+		pkt
+	};
+
+	assert_eq!(actual, expected);
 }
 
 #[test]

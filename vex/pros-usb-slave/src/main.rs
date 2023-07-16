@@ -4,7 +4,7 @@
 extern crate alloc;
 extern crate pros;
 
-use alloc::{ffi::CString, format, sync::Arc};
+use alloc::sync::Arc;
 use core::ptr;
 
 use pros::prelude::*;
@@ -17,12 +17,18 @@ use pros::{
 use protocol::{self as proto, Layout, Packet, Packet1, Packet2, Packet3, Packet4};
 
 const BUFFER_SIZE: usize = 256;
+const PERIOD: Duration = Duration::from_millis(7);
+const WATCHDOG_TIMEOUT: Duration = Duration::from_millis(50);
 
-#[allow(dead_code)]
-struct VexRobot {
+struct Tasks {
 	serial_writer_task: Task,
 	serial_reader_task: Task,
 	serial_watchdog: Task,
+}
+
+struct VexRobot {
+	#[allow(dead_code)]
+	tasks: Arc<Mutex<Tasks>>,
 }
 
 impl VexRobot {
@@ -100,10 +106,8 @@ impl VexRobot {
 		}
 
 		send_packet(sout, &pkt1, &mut write_buf, &mut cobs_buf).expect("Failed to send Packet1");
-		pros::screen_print_at(1, pros::cstr!("send pkt"));
 		_ = recv_packet::<Packet2>(sin, &pkt1, &mut read_buf, &mut cobs_buf)
 			.expect("Failed to receive Packet2");
-		pros::screen_print_at(3, pros::cstr!("recv pkt"));
 
 		pkt1
 	}
@@ -130,28 +134,28 @@ impl VexRobot {
 			pkt.state = proto::CompetitionState::User;
 
 			// Controller state
-			unsafe {
-				let controller = Controller::master();
-				let axes = [
-					controller.get_analog_raw(Axis::LeftX)?,
-					controller.get_analog_raw(Axis::LeftY)?,
-					controller.get_analog_raw(Axis::RightX)?,
-					controller.get_analog_raw(Axis::RightY)?,
-				];
-				let buttons =
-					proto::ControllerButtons::from_bits_truncate(controller.get_buttons()?.bits());
+			let controller = unsafe { Controller::master() };
+			let axes = [
+				controller.get_analog_raw(Axis::LeftX)?,
+				controller.get_analog_raw(Axis::LeftY)?,
+				controller.get_analog_raw(Axis::RightX)?,
+				controller.get_analog_raw(Axis::RightY)?,
+			];
+			let buttons =
+				proto::ControllerButtons::from_bits_truncate(controller.get_buttons()?.bits());
 
-				pkt.controller_buttons = buttons;
-				pkt.controller_axes = axes;
-			}
+			pkt.controller_buttons = buttons;
+			pkt.controller_axes = axes;
+
 			// Encoder values
 			for encoder in &encoders {
 				let value = encoder.get_position()?;
-				pkt.set_encoder(encoder.get_port() as _, value);
+				pkt.set_encoder((encoder.get_port() - 1) as usize, value);
 			}
+
 			// Motor encoders and state
 			for motor in &motors {
-				let port = motor.get_port() as _;
+				let port = (motor.get_port() - 1) as usize;
 
 				let position = (motor.get_position()? * 100.0) as i32;
 				pkt.set_encoder(port, position);
@@ -169,7 +173,7 @@ impl VexRobot {
 			Ok(())
 		};
 
-		let mut timer = Interval::new(Duration::from_millis(5));
+		let mut timer = Interval::new(PERIOD);
 		loop {
 			// Write message and handle errors
 			match f() {
@@ -212,26 +216,26 @@ impl VexRobot {
 					None => continue,
 				};
 				let mut motor = Motor {
-					port: unsafe { Port::new_unchecked(port as _) },
+					port: unsafe { Port::new_unchecked((port + 1) as _) },
 				};
-				motor
-					.move_voltage(*power)
-					.map_err(|e| (Vec::new(), e.into()))?;
+				motor.move_voltage(*power).ok(); // TODO: handle disconnect motor
 			}
 
 			// Set the triport toggles
 			for i in 0..8 {
 				let active = pkt.triport_toggle >> i & 0x01 == 1;
-				let mut triport = unsafe { TriPort::new_unchecked(i + 1, None) }
+				let triport = unsafe { TriPort::new_unchecked(i + 1, None) }
 					.into_digital_out()
-					.map_err(|e| (Vec::new(), e.into()))?;
-				triport.write(active);
+					.ok();
+				if let Some(mut port) = triport {
+					port.write(active);
+				}
 			}
 
 			Ok(())
 		};
 
-		let mut timer = Interval::new(Duration::from_millis(5));
+		let mut timer = Interval::new(PERIOD);
 		loop {
 			// Read messages and handle errors
 			match f() {
@@ -256,44 +260,36 @@ impl VexRobot {
 	}
 
 	fn serial_watchdog(reader: Task, writer: Task, watchdog_notifier: WatchdogNotifier) {
-		const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(1200);
-
 		let mut timer = Interval::new(Duration::from_millis(20));
 		loop {
 			let mut notifier = watchdog_notifier.lock();
 			if notifier.last_read.elapsed() > WATCHDOG_TIMEOUT {
 				notifier.reader_error = Some((Vec::new(), Error::Timeout));
-				pros::screen_print_at(1, pros::cstr!("killed reader"));
 				reader.clone().delete();
 			}
 			if notifier.last_write.elapsed() > WATCHDOG_TIMEOUT {
 				notifier.writer_error = Some(Error::Timeout);
-				pros::screen_print_at(2, pros::cstr!("killed writer"));
 				writer.clone().delete();
 			}
 
 			timer.delay();
 		}
 	}
-}
 
-impl Robot for VexRobot {
-	fn new(_: Devices) -> Self {
-		Task::delay(Duration::from_millis(500));
+	fn serial_spawn_task(tasks: Arc<Mutex<Tasks>>) {
+		let mut tasks = tasks.lock();
 
 		// Get resources
 		let (motors, encoders) = Self::gather_devices();
 		let streams = Self::configure_streams();
 
-		pros::screen_print_at(0, pros::cstr!("starting handshake"));
 		// Perform the initial handshake
 		let layout = Self::serial_handshake(&motors, &encoders, streams);
-		pros::screen_print_at(4, pros::cstr!("testing1"));
 
 		// Create watchdog resource
 		let watchdog_notifier = WatchdogNotifier::new();
 
-		let serial_writer_task = TaskBuilder::new()
+		tasks.serial_writer_task = TaskBuilder::new()
 			.name("coprocessor-writerd".into())
 			.priority(Task::PRIORITY_DEFAULT + 1)
 			.spawn({
@@ -303,7 +299,7 @@ impl Robot for VexRobot {
 			})
 			.unwrap();
 
-		let serial_reader_task = TaskBuilder::new()
+		tasks.serial_reader_task = TaskBuilder::new()
 			.name("coprocessor-readerd".into())
 			.priority(Task::PRIORITY_DEFAULT + 1)
 			.spawn({
@@ -313,21 +309,31 @@ impl Robot for VexRobot {
 			})
 			.unwrap();
 
-		let serial_watchdog = TaskBuilder::new()
+		tasks.serial_watchdog = TaskBuilder::new()
 			.name("coprocessor-watchdog".into())
 			.priority(Task::PRIORITY_DEFAULT - 1)
 			.spawn({
-				let reader = serial_reader_task.clone();
-				let writer = serial_writer_task.clone();
+				let reader = tasks.serial_reader_task.clone();
+				let writer = tasks.serial_writer_task.clone();
 				|| Self::serial_watchdog(reader, writer, watchdog_notifier)
 			})
 			.unwrap();
+	}
+}
 
-		Self {
-			serial_writer_task,
-			serial_reader_task,
-			serial_watchdog,
-		}
+impl Robot for VexRobot {
+	fn new(_: Devices) -> Self {
+		#[allow(invalid_value)]
+		let tasks = Arc::new(Mutex::new(unsafe {
+			core::mem::MaybeUninit::uninit().assume_init()
+		}));
+
+		pros::rtos::tasks::spawn({
+			let tasks = tasks.clone();
+			move || Self::serial_spawn_task(tasks)
+		});
+
+		Self { tasks }
 	}
 }
 
@@ -354,6 +360,11 @@ impl WatchdogNotifier {
 		};
 
 		Self(Arc::new(Mutex::new(inner)))
+	}
+
+	pub fn is_dead(&self) -> bool {
+		let timers = self.lock();
+		timers.writer_error.is_some() || timers.reader_error.is_some()
 	}
 }
 
@@ -433,14 +444,6 @@ fn send_packet<P: Packet>(
 	Ok(())
 }
 
-extern "C" {
-	pub fn dev_ctl(
-		arg: *const core::ffi::c_void,
-		cmd: u32,
-		extra_arg: *const core::ffi::c_void,
-	) -> core::ffi::c_int;
-}
-
 // Returns the packet on success, on error returns the read data and the error
 // caused
 fn recv_packet<'a, P: Packet>(
@@ -452,13 +455,6 @@ fn recv_packet<'a, P: Packet>(
 	// Read the packet in
 	let mut i = 0;
 	let read = loop {
-		// is there data?
-		if unsafe { dev_ctl(*stream as _, 16, ptr::null_mut()) } != 0 {
-			pros::screen_print_at(2, pros::cstr!("data ready"));
-		} else {
-			pros::screen_print_at(2, pros::cstr!("no data ready"));
-		}
-
 		// Read byte and check for EOF
 		let c = unsafe {
 			let c = libc::fgetc(*stream);
@@ -467,14 +463,6 @@ fn recv_packet<'a, P: Packet>(
 			}
 			c
 		};
-
-		pros::screen_print_at(
-			2,
-			CString::new(format!("read byte {}: {}", i, c))
-				.unwrap()
-				.as_c_str()
-				.as_ptr() as _,
-		);
 
 		// Check if was null byte
 		if c == 0 {

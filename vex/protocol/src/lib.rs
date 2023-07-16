@@ -272,8 +272,8 @@ impl Packet for Packet3 {
 			let s = state.quantise();
 			out = out
 				.append(&s.0.to_be_bytes())?
-				.append(&s.0.to_be_bytes())?
-				.append(&s.0.to_be_bytes())?;
+				.append(&s.1.to_be_bytes())?
+				.append(&s.2.to_be_bytes())?;
 		}
 
 		Ok(out.finish())
@@ -296,7 +296,7 @@ impl Packet for Packet3 {
 		i += 2;
 
 		for j in 0..4 {
-			pkt.controller_axes[i] = i8::from_be_bytes(bytes[i + j..i + j + 1].try_into().unwrap());
+			pkt.controller_axes[j] = i8::from_be_bytes(bytes[i + j..i + j + 1].try_into().unwrap());
 		}
 		i += 4;
 

@@ -45,7 +45,7 @@ impl Port {
 			.parity(serialport::Parity::None)
 			.stop_bits(serialport::StopBits::One)
 			.data_bits(serialport::DataBits::Eight)
-			.timeout(Duration::from_secs(5))
+			.timeout(Duration::from_secs(1))
 			.open_native()
 			.and_then(|mut tty| {
 				tty.set_exclusive(false)?;
@@ -82,7 +82,6 @@ impl Port {
 				let pkt = self
 					.recv_packet::<Packet3>(&layout, &mut read_buf, &mut cobs_buf)
 					.expect("Failed to read packet");
-				log::debug!("recv packet: {:?}", pkt);
 				{
 					*serial_data.recv_pkt_lock().unwrap() = pkt;
 				}
@@ -146,8 +145,6 @@ impl Port {
 		// Encode COBS and add null terminator
 		cobs_buf.resize(cobs::max_encode_size(bytes.len()), 0);
 		let encoded = cobs::encode(bytes, &mut cobs_buf[..])?;
-
-		println!("write {:?}", encoded);
 
 		// Write the packet out
 		self.writer.write_all(encoded)?;
