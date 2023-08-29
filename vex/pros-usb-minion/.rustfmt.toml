@@ -6,3 +6,4 @@ max_width = 100
 normalize_doc_attributes = true
 reorder_imports = true
 wrap_comments = true
+comment_width = 100

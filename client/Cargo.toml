@@ -5,10 +5,9 @@ edition = "2021"
 
 [dependencies]
 common = { path = "../common"}
-
 crossbeam-channel = "0.5"
 log = "0.4"
-tungstenite = { version = "0.19", default-features = false, features = ["handshake"] }
+tungstenite = { version = "0.20", default-features = false, features = ["handshake"] }
 
 cobs = { path = "../cobs", optional = true, features = ["alloc"] }
 protocol = { path = "../vex/protocol", optional = true }

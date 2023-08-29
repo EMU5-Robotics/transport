@@ -4,5 +4,6 @@ members = [
 	"server",
 	"cobs",
 	"common",
+	"robotmanager",
 	"vex/protocol",
 ]

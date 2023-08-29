@@ -6,15 +6,19 @@ edition = "2021"
 [dependencies]
 common = { path = "../common"}
 
+actix = "0.13"
+actix-web = "4.3"
+actix-web-actors = "4.2"
+actix-ws = "0.2"
+
 anyhow = "1.0"
 futures = "0.3"
 futures-channel = "0.3"
 log = "0.4"
 pnet = "0.33"
-tokio = { version = "1.0", default-features = false, features = ["macros", "net", "rt-multi-thread", "time"] }
 rand = "0.8"
 
-actix = "0.13"
-actix-web = "4.3"
-actix-web-actors = "4.1"
-actix-ws = "0.2"
+[dependencies.tokio]
+version = "1"
+default-features = false
+features = [ "macros", "net", "rt-multi-thread", "time" ]

@@ -10,11 +10,12 @@ use common::SERVER_PORT;
 mod actors;
 mod broadcaster;
 
-fn main() {
-	let rt = tokio::runtime::Runtime::new().unwrap();
-
+#[actix_web::main]
+async fn main() {
+	common::create_logger();
 	let interface = default_interface().unwrap();
 
+	// Spawn a broadcaster to clients can find the server
 	tokio::spawn({
 		let interface = interface.clone();
 		async move {
@@ -28,15 +29,7 @@ fn main() {
 		}
 	});
 
-	rt.block_on(server_main(interface));
-}
-
-pub fn default_interface() -> Option<pnet::datalink::NetworkInterface> {
-	// Check that the interface is, up, not loopback, has an IPv4 address
-	pnet::datalink::interfaces()
-		.iter()
-		.find(|e| e.is_up() && !e.is_loopback() && e.ips.iter().any(|i| i.is_ipv4()))
-		.cloned()
+	server_main(interface).await;
 }
 
 pub async fn server_main(interface: pnet::datalink::NetworkInterface) {
@@ -65,4 +58,12 @@ async fn server_route(
 	srv: web::Data<Addr<DataServer>>,
 ) -> Result<HttpResponse, Error> {
 	ws::start(ClientConnection::new(srv.get_ref().clone()), &req, stream)
+}
+
+fn default_interface() -> Option<pnet::datalink::NetworkInterface> {
+	// Check that the interface is: up, not loopback, has an IPv4 address
+	pnet::datalink::interfaces()
+		.iter()
+		.find(|e| e.is_up() && !e.is_loopback() && e.ips.iter().any(|i| i.is_ipv4()))
+		.cloned()
 }

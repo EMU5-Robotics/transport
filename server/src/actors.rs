@@ -8,24 +8,39 @@ use actix_web_actors::ws;
 use anyhow::Result;
 use rand::{self, rngs::ThreadRng, Rng};
 
-use common::{ClientId, Message, MessageContent, Role, MAX_CLIENT_ID};
+use common::protocol::{ClientId, ControlMessage, Packet, Role};
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct ActorMessage(pub Message);
+struct ActorPacket(Packet);
 
 #[derive(Message)]
 #[rtype(result = "Option<(ClientId, String)>")]
-pub struct Connect {
-	pub addr: Recipient<ActorMessage>,
-	pub role: Role,
-	pub prefered_name: Option<String>,
+struct ClientConnect {
+	addr: Recipient<ActorPacket>,
+	role: Role,
+	prefered_name: Option<String>,
 }
+
+#[derive(Message)]
+#[rtype(result = "()")]
+struct ClientDisconnect(ClientId);
+
+#[derive(Message)]
+#[rtype(result = "()")]
+struct ClientInvalidMessage(ClientId, Packet);
+
+#[derive(Message)]
+#[rtype(result = "()")]
+struct PeerListRequest(ClientId);
+
+#[derive(Message)]
+#[rtype(result = "()")]
+struct PacketForward(Packet);
 
 struct ClientInfo {
 	name: String,
-	role: Role,
-	addr: Recipient<ActorMessage>,
+	addr: Recipient<ActorPacket>,
 }
 
 pub struct DataServer {
@@ -45,17 +60,18 @@ impl DataServer {
 
 	/// generate a random client ID that isn't in use, isn't 0 and is less than
 	/// the max possible client ID
-	fn gen_client_id(&mut self) -> Option<ClientId> {
+	fn gen_client_id(&mut self, role: Role) -> Option<ClientId> {
 		// if for whatever reason none are left then return none
-		if self.clients.len() - 1 >= MAX_CLIENT_ID as _ {
+		if self.clients.len() >= ClientId::MAX_ID as usize - 1 {
 			return None;
 		}
 
 		loop {
-			let id = self.rng.gen::<ClientId>() % MAX_CLIENT_ID;
+			let id = self.rng.gen::<u8>() % (ClientId::MAX_ID + 1);
 			if id == 0 {
 				continue;
 			}
+			let id = ClientId::new(id, role);
 			if self.clients.get(&id).is_none() {
 				return Some(id);
 			}
@@ -78,27 +94,30 @@ impl Actor for DataServer {
 	}
 }
 
-impl Handler<Connect> for DataServer {
+impl Handler<ClientConnect> for DataServer {
 	type Result = Option<(ClientId, String)>;
 
-	fn handle(&mut self, msg: Connect, _: &mut Self::Context) -> Self::Result {
+	fn handle(&mut self, msg: ClientConnect, _: &mut Self::Context) -> Self::Result {
 		// find a new client ID
-		let id = self.gen_client_id()?;
-		let role = msg.role;
+		let id = self.gen_client_id(msg.role)?;
 
 		// get a name
 		let name = match msg.prefered_name {
 			Some(x) => x,
-			None => format!("client-{}", id),
+			None => match id.role() {
+				Role::Robot => format!("robot-{}", id.id()),
+				Role::Client => format!("client-{}", id.id()),
+				_ => unreachable!(),
+			},
 		};
 
 		// send the client init ack
 		let timestamp = self.get_timestamp();
-		msg.addr.do_send(ActorMessage(Message {
-			id: 0,
-			role: Role::Server,
+		msg.addr.do_send(ActorPacket(Packet {
+			source: ClientId::server(),
+			target: id,
 			timestamp,
-			msg: MessageContent::ClientInitAck {
+			msg: ControlMessage::ClientInitAck {
 				given_id: id,
 				name: name.clone(),
 				server_last_timestamp: timestamp,
@@ -109,7 +128,6 @@ impl Handler<Connect> for DataServer {
 			id,
 			ClientInfo {
 				name: name.clone(),
-				role,
 				addr: msg.addr,
 			},
 		);
@@ -118,24 +136,102 @@ impl Handler<Connect> for DataServer {
 	}
 }
 
+impl Handler<ClientDisconnect> for DataServer {
+	type Result = ();
+
+	fn handle(&mut self, msg: ClientDisconnect, _: &mut Self::Context) -> Self::Result {
+		// remove the client from the list
+		self.clients.remove(&msg.0);
+	}
+}
+
+impl Handler<ClientInvalidMessage> for DataServer {
+	type Result = ();
+
+	fn handle(&mut self, msg: ClientInvalidMessage, _: &mut Self::Context) -> Self::Result {
+		let client = &self.clients[&msg.0];
+
+		client.addr.do_send(ActorPacket(Packet {
+			source: ClientId::server(),
+			target: msg.0,
+			timestamp: self.get_timestamp(),
+			msg: ControlMessage::InvalidMessage(Box::new(msg.1)),
+		}));
+	}
+}
+
+impl Handler<PeerListRequest> for DataServer {
+	type Result = ();
+
+	fn handle(&mut self, msg: PeerListRequest, _: &mut Self::Context) -> Self::Result {
+		// get a list of peers
+		let peers = self
+			.clients
+			.iter()
+			.filter(|&(&id, _)| id != msg.0)
+			.map(|(&id, info)| (id, info.name.clone()))
+			.collect();
+
+		let addr = &self.clients[&msg.0].addr;
+		addr.do_send(ActorPacket(Packet {
+			source: ClientId::server(),
+			target: msg.0,
+			timestamp: self.get_timestamp(),
+			msg: ControlMessage::PeerList(peers),
+		}));
+	}
+}
+
+impl Handler<PacketForward> for DataServer {
+	type Result = ();
+
+	fn handle(&mut self, msg: PacketForward, _: &mut Self::Context) -> Self::Result {
+		// Check that the target ID exists
+		match self.clients.get(&msg.0.target) {
+			Some(client) => {
+				// Forward the packet if it does
+				client.addr.do_send(ActorPacket(msg.0));
+			}
+			None => {
+				// If it doesn't exist than notify the sender
+				self.clients[&msg.0.source]
+					.addr
+					.do_send(ActorPacket(Packet {
+						source: ClientId::server(),
+						target: msg.0.source,
+						timestamp: self.get_timestamp(),
+						msg: ControlMessage::UnknownClientId(msg.0.target),
+					}));
+			}
+		}
+	}
+}
+
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+enum ClientState {
+	WaitingForHandshake,
+	Operating,
+}
 
 pub struct ClientConnection {
 	id: ClientId,
 	name: String,
+	state: ClientState,
 	hb: Instant,
-	addr: Addr<DataServer>,
+	server: Addr<DataServer>,
 	encode_scratch: Vec<u8>,
 }
 
 impl ClientConnection {
 	pub fn new(server_addr: Addr<DataServer>) -> Self {
 		Self {
-			id: 0,
+			id: ClientId::null(),
 			name: String::new(),
+			state: ClientState::WaitingForHandshake,
 			hb: Instant::now(),
-			addr: server_addr,
+			server: server_addr,
 			encode_scratch: Vec::new(),
 		}
 	}
@@ -143,9 +239,8 @@ impl ClientConnection {
 
 impl ClientConnection {
 	fn hb(&self, ctx: &mut ws::WebsocketContext<Self>) {
-		ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
+		ctx.run_interval(HEARTBEAT_INTERVAL, move |act, ctx| {
 			if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
-				// TODO: notify about timeout
 				ctx.stop();
 				return;
 			}
@@ -160,23 +255,90 @@ impl Actor for ClientConnection {
 	fn started(&mut self, ctx: &mut Self::Context) {
 		// begin heartbeat
 		self.hb(ctx);
-		// don't register self with data server yet, wait until we get a
-		// ClientInit message first
+		// don't register self with data server yet, wait until we get a ClientInit message first
 	}
 
-	fn stopping(&mut self, _: &mut Self::Context) -> Running {
-		// TODO: notify data server
+	fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+		self.server.do_send(ClientDisconnect(self.id));
 		Running::Stop
 	}
 }
 
-impl Handler<ActorMessage> for ClientConnection {
+impl Handler<ActorPacket> for ClientConnection {
 	type Result = ();
 
-	fn handle(&mut self, msg: ActorMessage, ctx: &mut Self::Context) {
+	fn handle(&mut self, msg: ActorPacket, ctx: &mut Self::Context) {
 		self.encode_scratch.clear();
-		Message::encode(&msg.0, &mut self.encode_scratch);
+		Packet::encode(&msg.0, &mut self.encode_scratch);
 		ctx.binary(self.encode_scratch.clone());
+	}
+}
+
+impl ClientConnection {
+	fn handle_packet_handshake(
+		&mut self,
+		packet: Packet,
+		ctx: &mut <ClientConnection as Actor>::Context,
+	) {
+		match packet.msg {
+			// handle the incoming packet for the handshake
+			ControlMessage::ClientInit { name, role } => {
+				// send a message to connect our web socket to the data server
+				self.server
+					.send(ClientConnect {
+						addr: ctx.address().recipient(),
+						role,
+						prefered_name: name,
+					})
+					.into_actor(self)
+					.then(|res, act, ctx| {
+						match res {
+							Ok(Some(res)) => {
+								act.id = res.0;
+								act.name = res.1;
+								act.state = ClientState::Operating;
+							}
+							_ => ctx.stop(),
+						}
+						fut::ready(())
+					})
+					.wait(ctx);
+			}
+			// if we get any weird packets then just close the connection
+			_ => {
+				ctx.stop();
+			}
+		}
+	}
+
+	fn handle_packet(&mut self, packet: Packet, ctx: &mut <ClientConnection as Actor>::Context) {
+		match packet.msg {
+			ControlMessage::PeerListRequest => {
+				self.server.do_send(PeerListRequest(self.id));
+			}
+			ControlMessage::PeerList(_) => {
+				self.server.do_send(ClientInvalidMessage(self.id, packet));
+			}
+			ControlMessage::ManageMessage(_) => self.handle_packet_forward(packet, ctx),
+			ControlMessage::InvalidMessage(_) => {
+				// if we got an invalid message packet for some reason then just close the connection
+				ctx.stop();
+			}
+			_ => {}
+		}
+	}
+
+	fn handle_packet_forward(
+		&mut self,
+		packet: Packet,
+		_ctx: &mut <ClientConnection as Actor>::Context,
+	) {
+		self.server.do_send(PacketForward(Packet {
+			source: self.id,
+			target: packet.target,
+			timestamp: packet.timestamp,
+			msg: packet.msg,
+		}));
 	}
 }
 
@@ -191,8 +353,20 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ClientConnection 
 		};
 
 		match msg {
-			ws::Message::Binary(_bytes) => {
-				// TODO
+			ws::Message::Binary(bytes) => {
+				let packet = match Packet::decode(&bytes) {
+					Ok(pkt) => pkt,
+					Err(err) => {
+						log::error!("Error decoding packet: {:?}", err);
+						ctx.stop();
+						return;
+					}
+				};
+
+				match self.state {
+					ClientState::WaitingForHandshake => self.handle_packet_handshake(packet, ctx),
+					ClientState::Operating => self.handle_packet(packet, ctx),
+				}
 			}
 			ws::Message::Ping(msg) => {
 				self.hb = Instant::now();

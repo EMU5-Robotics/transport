@@ -47,7 +47,7 @@ pub fn encode<'a>(in_buf: &[u8], out_buf: &'a mut [u8]) -> Result<&'a [u8]> {
 	let mut code_i = 0; // index of the code
 
 	// check we have enough space for a single byte output
-	if out_buf.len() == 0 {
+	if out_buf.is_empty() {
 		return Err(Error::OutputBufferFull);
 	}
 

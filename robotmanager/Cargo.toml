@@ -1,0 +1,10 @@
+[package]
+name = "robotmanager"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+argh = "0.1"
+client = { path = "../client", default-features = false }
+common = { path = "../common" }
+log = "0.4"
