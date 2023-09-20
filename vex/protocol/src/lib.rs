@@ -1,8 +1,8 @@
 #![no_std]
 
+extern crate alloc;
 #[cfg(test)]
 extern crate std;
-extern crate alloc;
 
 mod packets;
 

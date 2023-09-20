@@ -114,8 +114,10 @@ impl Serial {
 		let mut cobs_buf = vec![0; 512].into_boxed_slice();
 
 		let mut state = State::BeginInit;
+		let mut timeout_count = 0;
+		const TIMEOUT: usize = 3;
 
-		loop {
+		'outer: loop {
 			match state {
 				// Send an InitPkt
 				State::BeginInit => {
@@ -132,6 +134,7 @@ impl Serial {
 				State::WaitingForDevices => {
 					// Read until we get a valid devices packet
 					let devices;
+					let mut timeout_count = 0;
 					loop {
 						match recv_pkt(
 							&mut reader,
@@ -143,6 +146,18 @@ impl Serial {
 								devices = pkt;
 								log::debug!("Read devices packet: {:?}", devices);
 								break;
+							}
+							Err(Error::IoErr(err))
+								if matches!(err.kind(), std::io::ErrorKind::TimedOut) =>
+							{
+								timeout_count += 1;
+								// If a respone is not sent in 3 second than try and send another
+								// init packet
+								if timeout_count >= TIMEOUT {
+									log::info!("InitPkt timeout, retrying");
+									state = State::BeginInit;
+									continue 'outer;
+								}
 							}
 							Err(err) => {
 								log::debug!("Failed to read devices packet: {:?}", err);
@@ -192,10 +207,24 @@ impl Serial {
 							// Other packet types are unexpected here
 							unimplemented!()
 						}
+						Err(Error::IoErr(err))
+							if matches!(err.kind(), std::io::ErrorKind::TimedOut) =>
+						{
+							timeout_count += 1;
+							// If a respone is not sent in 3 second than try and send another
+							// init packet
+							if timeout_count >= TIMEOUT {
+								log::info!("StatusPkt timeout, retrying");
+								state = State::BeginInit;
+								timeout_count = 0;
+								continue 'outer;
+							}
+						}
 						Err(err) => {
 							log::error!("Failed to read packet: {:?}", err);
 							// TODO: perhaps try restarting the connection?
-							return;
+							state = State::BeginInit;
+							continue 'outer;
 						}
 					}
 				}
