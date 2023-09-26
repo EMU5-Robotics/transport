@@ -364,7 +364,7 @@ impl StatusPkt {
 		self.encoder_positions[port - 1] = Some(value);
 	}
 
-	pub fn get_encoder(&mut self, port: usize) -> Option<i32> {
+	pub fn get_encoder(&self, port: usize) -> Option<i32> {
 		assert!(port >= 1 && port <= 20);
 		self.encoder_positions[port - 1]
 	}
