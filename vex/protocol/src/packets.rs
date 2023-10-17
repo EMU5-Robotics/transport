@@ -45,17 +45,6 @@ pub mod device {
 		}
 	}
 
-	// #[repr(u8)]
-	// #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
-	// pub enum CompetitionState {
-	// 	Initialise = 1,
-	// 	Disabled,
-	// 	CompetitionInitialise,
-	// 	Autonomous,
-	// 	User,
-	// 	Unknown = 0xFF,
-	// }
-
 	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 	pub struct MotorState {
 		current: u32,

@@ -12,7 +12,7 @@ struct VexRobot {}
 
 impl Robot for VexRobot {
 	fn new(_: pros::prelude::Devices) -> Self {
-		pros::rtos::tasks::spawn(|| Self::serial_task());
+		pros::rtos::tasks::spawn(|| serial::serial_task());
 
 		Self {}
 	}

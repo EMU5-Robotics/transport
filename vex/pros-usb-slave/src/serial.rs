@@ -3,7 +3,7 @@ use core::ptr;
 
 use pros::prelude::*;
 use pros::{
-	devices::{motor::Motor, rotation::RotationSensor, Direction},
+	devices::{motor::{Motor, EncoderUnits}, rotation::RotationSensor, Direction},
 	ports::Port,
 };
 
@@ -13,130 +13,131 @@ use protocol::{
 	ControlPkt, Devices, ErrorPkt, GenericPkt, InitPkt, Packet, StatusPkt,
 };
 
-impl crate::VexRobot {
-	pub fn serial_task() {
-		let streams = configure_streams();
-		let mut reader = UsbSerialReader::new(streams.0);
-		let mut writer = UsbSerialWriter::new(streams.1);
+pub fn serial_task() {
+	let streams = configure_streams();
+	let mut reader = UsbSerialReader::new(streams.0);
+	let mut writer = UsbSerialWriter::new(streams.1);
 
-		let mut state = State::WaitingForInit;
+	let mut state = State::WaitingForInit;
 
-		loop {
-			// Don't be greedy, give some time to other tasks as need
-			Task::delay(Duration::from_millis(1));
+	loop {
+		// Don't be greedy, give some time to other tasks as need
+		Task::delay(Duration::from_millis(1));
 
-			match state {
-				// Wait for an incoming init packet
-				State::WaitingForInit => match reader.recieve::<InitPkt>(&Devices::default()) {
-					// If we got an init packet then send out device list out
-					Ok(_) => {
-						log::info!("Got InitPkt");
-						state = State::SendDeviceList;
-					}
-					// Ignore the packet otherwise
-					Err(Error::PacketErr(_)) => {
-						log::debug!("Got bad packet when expecting InitPkt")
-					}
-					// If there was another error then it must be fatal
+		match state {
+			// Wait for an incoming init packet
+			State::WaitingForInit => match reader.recieve::<InitPkt>(&Devices::default()) {
+				// If we got an init packet then send out device list out
+				Ok(_) => {
+					log::info!("Got InitPkt");
+					state = State::SendDeviceList;
+				}
+				// Ignore the packet otherwise
+				Err(Error::PacketErr(_)) => {
+					log::debug!("Got bad packet when expecting InitPkt")
+				}
+				// If there was another error then it must be fatal
+				Err(err) => {
+					log::error!("Failed to read packet");
+					state = State::FatalError(err);
+					continue;
+				}
+			},
+			// Send a list of devices to the host controller
+			State::SendDeviceList => {
+				let devices = match gather_devices() {
+					Ok(x) => x,
 					Err(err) => {
-						log::error!("Failed to read packet");
+						log::error!("Failed to gather devices");
+						state = State::FatalError(err.into());
+						continue;
+					}
+				};
+
+				match writer.send(devices.clone()) {
+					Ok(_) => {}
+					Err(err) => {
+						log::error!("Failed to send packet");
 						state = State::FatalError(err);
 						continue;
 					}
-				},
-				// Send a list of devices to the host controller
-				State::SendDeviceList => {
-					let devices = match gather_devices() {
-						Ok(x) => x,
-						Err(err) => {
-							log::error!("Failed to gather devices");
-							state = State::FatalError(err.into());
-							continue;
-						}
-					};
-
-					match writer.send(devices.clone()) {
-						Ok(_) => {}
-						Err(err) => {
-							log::error!("Failed to send packet");
-							state = State::FatalError(err);
-							continue;
-						}
-					}
-
-					state = State::Operating(devices);
 				}
-				State::Operating(ref devices) => {
-					// Read an incoming packet
-					let pkt = match reader.recieve::<GenericPkt>(devices) {
-						Ok(x) => x,
-						Err(err) => {
-							log::error!("Failed to read packet in");
-							state = State::FatalError(err);
-							continue;
-						}
-					};
 
-					match pkt {
-						// Move the motors, etc.
-						GenericPkt::ControlPkt(ctrl) => match sink(ctrl) {
-							Ok(_) => {}
-							Err(err) => {
-								log::warn!("Device error: {:?}", err);
-								state = State::FailureRecovery;
-								continue;
-							}
-						},
-						// Restart the connection for whatever reason
-						GenericPkt::InitPkt(_) => {
-							state = State::SendDeviceList;
-							continue;
-						}
-						// Any other packets are invalid and should error
-						pkt => {
-							log::warn!("Unexpected packet: {:?}", pkt);
-							state = State::FailureRecovery;
-							continue;
-						}
+				state = State::Operating(devices);
+			}
+			State::Operating(ref devices) => {
+				// Read an incoming packet
+				let pkt = match reader.recieve::<GenericPkt>(devices) {
+					Ok(x) => x,
+					Err(err) => {
+						log::error!("Failed to read packet in");
+						state = State::FatalError(err);
+						continue;
 					}
+				};
 
-					// Collect information about the devices on the robot
-					let pkt = match source(&devices) {
-						Ok(x) => x,
+				match pkt {
+					// Move the motors, etc.
+					GenericPkt::ControlPkt(ctrl) => match sink(ctrl) {
+						Ok(_) => {}
 						Err(err) => {
 							log::warn!("Device error: {:?}", err);
 							state = State::FailureRecovery;
 							continue;
 						}
-					};
-					// Send it back
-					match writer.send(pkt) {
-						Ok(_) => {}
-						Err(err) => {
-							log::error!("Failed to send packet");
-							state = State::FatalError(err);
-							continue;
-						}
+					},
+					// Restart the connection for whatever reason
+					GenericPkt::InitPkt(_) => {
+						state = State::SendDeviceList;
+						continue;
+					}
+					// Any other packets are invalid and should error
+					pkt => {
+						log::warn!("Unexpected packet: {:?}", pkt);
+						state = State::FailureRecovery;
+						continue;
 					}
 				}
-				State::FailureRecovery => {
-					log::warn!(
-						"A recoverable error happened, sending ErrorPkt and new device list"
-					);
-					// Send an error packet without regard for errors
-					writer.send(ErrorPkt::recoverable()).ok();
-					state = State::SendDeviceList;
-					continue;
+
+				// Collect information about the devices on the robot
+				let pkt = match source(&devices) {
+					Ok(x) => x,
+					Err(err) => {
+						log::warn!("Device error: {:?}", err);
+						state = State::FailureRecovery;
+						continue;
+					}
+				};
+				// Send it back
+				match writer.send(pkt) {
+					Ok(_) => {}
+					Err(err) => {
+						log::error!("Failed to send packet");
+						state = State::FatalError(err);
+						continue;
+					}
 				}
-				State::FatalError(err) => {
-					log::error!(
-						"Fatal error {:?} occurred falling back to basic driver control",
-						err
-					);
-					// Send an error packet without regard for errors
-					writer.send(ErrorPkt::fatal()).ok();
-					todo!()
-				}
+			}
+			State::FailureRecovery => {
+				log::warn!(
+					"A recoverable error happened, sending ErrorPkt and new device list"
+				);
+				// Send an error packet without regard for errors
+				writer.send(ErrorPkt::recoverable()).ok();
+				state = State::SendDeviceList;
+				continue;
+			}
+			State::FatalError(ref err) => {
+				log::error!(
+					"Fatal error {:?} occurred falling back to basic driver control",
+					err
+				);
+				// Send an error packet without regard for errors
+				writer.send(ErrorPkt::fatal()).ok();
+                // TODO: Determine proper behaviour?
+                // For now we will just treat fatal errors as recoverable errors anyway
+                state = State::SendDeviceList;
+                continue;
 			}
 		}
 	}
@@ -159,11 +160,11 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 		let port = unsafe { Port::new_unchecked(port_num) };
 		match port.plugged_type() {
 			DeviceType::Motor => {
-				let _ = port.into_motor_default()?;
+				let _ = port.into_motor_default()?.set_encoder_units(EncoderUnits::Ticks)?;
 				devices.set_port(port_num as _, PortState::Motor);
 			}
 			DeviceType::Rotation => {
-				let _ = port.into_rotation_sensor(Direction::Forward)?;
+				let _ = port.into_rotation_sensor(Direction::Forward)?.set_data_rate(5)?;
 				devices.set_port(port_num as _, PortState::Encoder);
 			}
 			DeviceType::None => {}
