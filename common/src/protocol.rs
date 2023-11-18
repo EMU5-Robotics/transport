@@ -82,6 +82,8 @@ pub enum ManageMessage {
 	/// The name of a program to run as listed from [`ManageMessage::ProgramList`]. Has no
 	/// response.
 	RunProgram(String),
+	/// Announce rerun server location,
+	AnnounceRerunServer(std::net::SocketAddr),
 
 	/* Response Messages */
 	/// A list of program on the robot. Requested by [`ManageMessage::ListPrograms`].

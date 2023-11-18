@@ -2,12 +2,13 @@ use std::{
 	fmt::Write as FmtWrite,
 	io::{self, BufRead, BufReader, BufWriter, Read, Write},
 	path::Path,
-	sync::{Arc, LockResult, Mutex, MutexGuard},
+	sync::{Arc, Mutex},
 	time::{Duration, Instant},
 };
 
 use protocol::{
-	self as proto, ControlPkt, Devices, ErrorPkt, ErrorType, GenericPkt, InitPkt, Packet, StatusPkt,
+	self as proto, ControlPkt, Devices, DevicesPkt, ErrorPkt, ErrorType, GenericPkt, InitPkt,
+	Packet, StatusPkt,
 };
 use serialport::{SerialPortInfo, SerialPortType, TTYPort, UsbPortInfo};
 
@@ -63,12 +64,12 @@ pub fn find_v5_port() -> serialport::Result<(SerialPortInfo, SerialPortInfo)> {
 	}
 }
 
-pub struct Serial {
+pub struct SerialSpawner {
 	reader: BufReader<TTYPort>,
 	writer: BufWriter<TTYPort>,
 }
 
-impl Serial {
+impl SerialSpawner {
 	pub fn open(path: &str) -> serialport::Result<Self> {
 		let port = serialport::new(path, 115200)
 			.parity(serialport::Parity::None)
@@ -95,17 +96,17 @@ impl Serial {
 	}
 }
 
-impl Serial {
-	pub fn spawn_threaded(self) -> SerialData {
-		let data = SerialData::new(&Devices::default());
+impl SerialSpawner {
+	pub fn spawn_threaded(self, pkt_cb: Option<Box<dyn Fn(GenericPkt) + Send>>) -> Serial {
+		let data = Serial::new();
 
 		let x = data.clone();
-		std::thread::spawn(move || Self::serial_handler(x, self));
+		std::thread::spawn(move || Self::serial_handler(x, self, pkt_cb));
 
 		data
 	}
 
-	pub fn serial_handler(data: SerialData, this: Self) {
+	fn serial_handler(data: Serial, this: Self, pkt_cb: Option<Box<dyn Fn(GenericPkt) + Send>>) {
 		let mut reader = this.reader;
 		let mut writer = this.writer;
 
@@ -136,14 +137,19 @@ impl Serial {
 					let devices;
 					let mut timeout_count = 0;
 					loop {
-						match recv_pkt(
+						match recv_pkt::<DevicesPkt>(
 							&mut reader,
 							&mut read_buf,
 							&mut cobs_buf,
 							&Devices::default(),
 						) {
 							Ok(pkt) => {
-								devices = pkt;
+								devices = pkt.clone();
+								data.set_devices(pkt.clone());
+								match pkt_cb {
+									Some(ref f) => f(GenericPkt::DevicesPkt(pkt)),
+									None => {}
+								}
 								log::debug!("Read devices packet: {:?}", devices);
 								break;
 							}
@@ -170,7 +176,7 @@ impl Serial {
 				}
 				State::Operating(ref devices) => {
 					// Write outgoing control packet
-					let pkt = { data.send_pkt_lock().unwrap().clone() };
+					let pkt = data.copy_control_pkt();
 					match send_pkt(&mut writer, &mut write_buf, &mut cobs_buf, pkt) {
 						Err(err) => {
 							log::error!("Failed to send packet: {:?}", err);
@@ -187,25 +193,41 @@ impl Serial {
 						&devices,
 					) {
 						Ok(GenericPkt::StatusPkt(pkt)) => {
-							*data.recv_pkt_lock().unwrap() = pkt;
+							data.put_status_pkt(pkt.clone());
+							match pkt_cb {
+								Some(ref f) => f(GenericPkt::StatusPkt(pkt)),
+								None => {}
+							}
 						}
-						Ok(GenericPkt::ErrorPkt(ErrorPkt {
-							err: ErrorType::Recoverable,
-						})) => {
+						Ok(
+							pkt @ GenericPkt::ErrorPkt(ErrorPkt {
+								err: ErrorType::Recoverable,
+							}),
+						) => {
+							match pkt_cb {
+								Some(ref f) => f(pkt),
+								None => {}
+							}
 							log::error!("Recoverable error packet sent from secondary controller, waiting for device list");
 							state = State::WaitingForDevices;
 							continue;
 						}
-						Ok(GenericPkt::ErrorPkt(ErrorPkt {
-							err: ErrorType::Fatal,
-						})) => {
+						Ok(
+							pkt @ GenericPkt::ErrorPkt(ErrorPkt {
+								err: ErrorType::Fatal,
+							}),
+						) => {
+							match pkt_cb {
+								Some(ref f) => f(pkt),
+								None => {}
+							}
 							log::error!("Fatal error packet sent from secondary controller");
 							state = State::FatalError(Error::SecondaryError);
 							continue;
 						}
-						Ok(_) => {
+						Ok(pkt) => {
 							// Other packet types are unexpected here
-							unimplemented!()
+							log::error!("unexpected packet type incoming: {:?}", pkt);
 						}
 						Err(Error::IoErr(err))
 							if matches!(err.kind(), std::io::ErrorKind::TimedOut) =>
@@ -229,6 +251,10 @@ impl Serial {
 					}
 				}
 				State::FatalError(err) => {
+					match pkt_cb {
+						Some(ref f) => f(GenericPkt::ErrorPkt(ErrorPkt::fatal())),
+						None => {}
+					}
 					log::error!("Fatal error occurred: {:?}", err);
 					return;
 				}
@@ -330,27 +356,45 @@ fn recv_pkt<P: Packet + std::fmt::Debug>(
 }
 
 #[derive(Clone)]
-pub struct SerialData(Arc<SerialDataInner>);
+pub struct Serial(Arc<SerialInner>);
 
-struct SerialDataInner {
-	recv: Mutex<StatusPkt>,
-	send: Mutex<ControlPkt>,
+struct SerialInner {
+	devices: Mutex<DevicesPkt>,
+	status_pkt: Mutex<Option<(Instant, StatusPkt)>>,
+	control_pkt: Mutex<ControlPkt>,
 }
 
-impl SerialData {
-	pub fn new(devices: &Devices) -> Self {
-		Self(Arc::new(SerialDataInner {
-			recv: Mutex::new(StatusPkt::from_devices(devices)),
-			send: Mutex::new(ControlPkt::from_devices(devices)),
+impl Serial {
+	pub fn new() -> Self {
+		Self(Arc::new(SerialInner {
+			devices: Mutex::new(DevicesPkt::default()),
+			status_pkt: Mutex::new(None),
+			control_pkt: Mutex::new(ControlPkt::default()),
 		}))
 	}
 
-	pub fn recv_pkt_lock(&self) -> LockResult<MutexGuard<'_, StatusPkt>> {
-		self.0.recv.lock()
+	fn set_devices(&self, pkt: DevicesPkt) {
+		*self.0.devices.lock().unwrap() = pkt;
 	}
 
-	pub fn send_pkt_lock(&self) -> LockResult<MutexGuard<'_, ControlPkt>> {
-		self.0.send.lock()
+	pub fn copy_devices(&self) -> DevicesPkt {
+		(*self.0.devices.lock().unwrap()).clone()
+	}
+
+	pub fn take_status_pkt(&self) -> Option<(Instant, StatusPkt)> {
+		self.0.status_pkt.lock().unwrap().take()
+	}
+
+	fn put_status_pkt(&self, pkt: StatusPkt) {
+		*self.0.status_pkt.lock().unwrap() = Some((Instant::now(), pkt));
+	}
+
+	fn copy_control_pkt(&self) -> ControlPkt {
+		(*self.0.control_pkt.lock().unwrap()).clone()
+	}
+
+	pub fn set_control_pkt(&self, pkt: ControlPkt) {
+		*self.0.control_pkt.lock().unwrap() = pkt;
 	}
 }
 
@@ -389,7 +433,7 @@ impl From<io::Error> for Error {
 }
 
 pub fn rtt_test(
-	port: &mut Serial,
+	port: &mut SerialSpawner,
 	round_count: usize,
 	msg_size: usize,
 	msg_byte: u8,

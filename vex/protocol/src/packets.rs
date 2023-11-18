@@ -47,9 +47,9 @@ pub mod device {
 
 	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 	pub struct MotorState {
-		current: u32,
-		voltage: i32,
-		temperature: i32,
+		pub current: u32,
+		pub voltage: i32,
+		pub temperature: i32,
 	}
 
 	// This should match the bitflags as defined within pros-rs
@@ -348,6 +348,13 @@ impl StatusPkt {
 		self.motor_states[port - 1]
 	}
 
+	pub fn motors(&self) -> impl Iterator<Item = (u8, MotorState)> + '_ {
+		self.motor_states
+			.iter()
+			.enumerate()
+			.filter_map(|(i, &s)| Some((i as u8, s?)))
+	}
+
 	pub fn set_encoder(&mut self, port: usize, value: i32) {
 		assert!(port >= 1 && port <= 20);
 		self.encoder_positions[port - 1] = Some(value);
@@ -356,6 +363,13 @@ impl StatusPkt {
 	pub fn get_encoder(&self, port: usize) -> Option<i32> {
 		assert!(port >= 1 && port <= 20);
 		self.encoder_positions[port - 1]
+	}
+
+	pub fn encoders(&self) -> impl Iterator<Item = (u8, i32)> + '_ {
+		self.encoder_positions
+			.iter()
+			.enumerate()
+			.filter_map(|(i, &s)| Some((i as u8, s?)))
 	}
 
 	const fn packet_size(encoders: usize, motors: usize) -> usize {

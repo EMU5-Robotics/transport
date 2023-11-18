@@ -19,7 +19,7 @@ async fn main() {
 	tokio::spawn({
 		let interface = interface.clone();
 		async move {
-			let mut brdcstr = broadcaster::Broadcaster::new(interface, Duration::from_secs(5))
+			let mut brdcstr = broadcaster::Broadcaster::new(interface, Duration::from_secs(1))
 				.await
 				.unwrap();
 			loop {

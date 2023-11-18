@@ -58,6 +58,8 @@ pub struct Client {
 	thrd_handle: JoinHandle<()>,
 	pub rx: Receiver<Packet>,
 	pub tx: Sender<Packet>,
+	pub id: ClientId,
+	pub name: String,
 }
 
 // TODO: packet builder
@@ -142,10 +144,19 @@ impl Client {
 			})
 			.ok();
 
+		// Wait for the handshake ack
+		let reply = clnt_rx.recv().unwrap();
+		let (id, name) = match reply.msg {
+			ControlMessage::ClientInitAck { given_id, name, .. } => (given_id, name),
+			_ => panic!("unexpected packet returned from server: {:?}", reply),
+		};
+
 		Self {
 			thrd_handle: handle,
 			rx: clnt_rx,
 			tx: clnt_tx,
+			id,
+			name,
 		}
 	}
 

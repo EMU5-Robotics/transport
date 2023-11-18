@@ -46,6 +46,19 @@ fn main() {
 					})
 					.ok();
 			}
+			"rerun start" => {
+				client
+					.tx
+					.send(Packet {
+						source: ClientId::null(),
+						target: ClientId::new(61, Role::Robot),
+						timestamp: 0,
+						msg: ControlMessage::ManageMessage(ManageMessage::AnnounceRerunServer(
+							"".parse().unwrap(),
+						)),
+					})
+					.ok();
+			}
 			_ => println!("unknown command"),
 		}
 	}
