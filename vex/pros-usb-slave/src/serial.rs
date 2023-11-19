@@ -132,10 +132,11 @@ pub fn serial_task() {
 					"Fatal error {:?} occurred falling back to basic driver control",
 					err
 				);
-				// Send an error packet without regard for errors
-				writer.send(ErrorPkt::fatal()).ok();
                 // TODO: Determine proper behaviour?
                 // For now we will just treat fatal errors as recoverable errors anyway
+
+				// Send an error packet without regard for errors
+				writer.send(ErrorPkt::recoverable()).ok();
                 state = State::SendDeviceList;
                 continue;
 			}

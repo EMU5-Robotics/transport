@@ -199,28 +199,24 @@ impl SerialSpawner {
 								None => {}
 							}
 						}
-						Ok(
-							pkt @ GenericPkt::ErrorPkt(ErrorPkt {
-								err: ErrorType::Recoverable,
-							}),
-						) => {
-							match pkt_cb {
-								Some(ref f) => f(pkt),
-								None => {}
-							}
+						Ok(/*pkt @ */ GenericPkt::ErrorPkt(ErrorPkt {
+							err: ErrorType::Recoverable,
+						})) => {
+							// match pkt_cb {
+							// 	Some(ref f) => f(pkt),
+							// 	None => {}
+							// }
 							log::error!("Recoverable error packet sent from secondary controller, waiting for device list");
 							state = State::WaitingForDevices;
 							continue;
 						}
-						Ok(
-							pkt @ GenericPkt::ErrorPkt(ErrorPkt {
-								err: ErrorType::Fatal,
-							}),
-						) => {
-							match pkt_cb {
-								Some(ref f) => f(pkt),
-								None => {}
-							}
+						Ok(/*pkt @ */ GenericPkt::ErrorPkt(ErrorPkt {
+							err: ErrorType::Fatal,
+						})) => {
+							// match pkt_cb {
+							// 	Some(ref f) => f(pkt),
+							// 	None => {}
+							// }
 							log::error!("Fatal error packet sent from secondary controller");
 							state = State::FatalError(Error::SecondaryError);
 							continue;
@@ -251,10 +247,6 @@ impl SerialSpawner {
 					}
 				}
 				State::FatalError(err) => {
-					match pkt_cb {
-						Some(ref f) => f(GenericPkt::ErrorPkt(ErrorPkt::fatal())),
-						None => {}
-					}
 					log::error!("Fatal error occurred: {:?}", err);
 					return;
 				}
@@ -374,6 +366,7 @@ impl Serial {
 	}
 
 	fn set_devices(&self, pkt: DevicesPkt) {
+		self.set_control_pkt(ControlPkt::from_devices(&pkt));
 		*self.0.devices.lock().unwrap() = pkt;
 	}
 
