@@ -188,6 +188,49 @@ impl ClientId {
 	pub fn role(&self) -> Role {
 		self.role
 	}
+
+	pub fn to_string(&self) -> String {
+		match self.role {
+			Role::Client => format!("{}C", self.id),
+			Role::Robot => format!("{}R", self.id),
+			Role::Server => format!("null"),
+		}
+	}
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ParseClientIdError {
+	NoTypeMarker,
+	UnknownCharacter,
+	ParseNumberError,
+}
+
+impl std::str::FromStr for ClientId {
+	type Err = ParseClientIdError;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		if s == "null" || s == "NULL" {
+			return Ok(ClientId::null());
+		}
+		let marker_idx = match s.find(|c: char| !c.is_ascii_digit()) {
+			Some(idx) => idx,
+			None => return Err(ParseClientIdError::NoTypeMarker),
+		};
+		let id = match s[0..marker_idx].parse::<u8>() {
+			Ok(id) => id,
+			Err(_) => return Err(ParseClientIdError::ParseNumberError),
+		};
+		let role = match &s[marker_idx..marker_idx + 1] {
+			"C" | "c" => Role::Client,
+			"R" | "r" => Role::Robot,
+			_ => return Err(ParseClientIdError::UnknownCharacter),
+		};
+		if marker_idx + 1 < s.len() {
+			return Err(ParseClientIdError::UnknownCharacter);
+		}
+
+		Ok(ClientId::new(id, role))
+	}
 }
 
 #[cfg(test)]
