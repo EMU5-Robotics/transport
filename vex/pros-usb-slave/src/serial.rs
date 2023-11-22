@@ -1,9 +1,13 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use core::ptr;
 
 use pros::prelude::*;
 use pros::{
-	devices::{motor::{Motor, EncoderUnits}, rotation::RotationSensor, Direction},
+	devices::{
+		motor::{EncoderUnits, Motor},
+		rotation::RotationSensor,
+		Direction,
+	},
 	ports::Port,
 };
 
@@ -13,12 +17,31 @@ use protocol::{
 	ControlPkt, Devices, ErrorPkt, GenericPkt, InitPkt, Packet, StatusPkt,
 };
 
+const MOTOR_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub fn serial_task() {
 	let streams = configure_streams();
 	let mut reader = UsbSerialReader::new(streams.0);
 	let mut writer = UsbSerialWriter::new(streams.1);
 
 	let mut state = State::WaitingForInit;
+	let last_packet = Arc::new(Mutex::new(Instant::now()));
+
+	// Spawn the motor halt task
+	{
+		let last_packet = last_packet.clone();
+		pros::rtos::tasks::spawn(move || loop {
+			if last_packet.lock().elapsed() > MOTOR_TIMEOUT {
+				// Stop motors
+				for i in 1..21 {
+					unsafe {
+						pros_sys::motor_move(i, 0);
+					}
+				}
+			}
+			Task::delay(Duration::from_millis(100));
+		});
+	}
 
 	loop {
 		// Don't be greedy, give some time to other tasks as need
@@ -76,6 +99,8 @@ pub fn serial_task() {
 					}
 				};
 
+				*last_packet.lock() = Instant::now();
+
 				match pkt {
 					// Move the motors, etc.
 					GenericPkt::ControlPkt(ctrl) => match sink(ctrl) {
@@ -119,9 +144,7 @@ pub fn serial_task() {
 				}
 			}
 			State::FailureRecovery => {
-				log::warn!(
-					"A recoverable error happened, sending ErrorPkt and new device list"
-				);
+				log::warn!("A recoverable error happened, sending ErrorPkt and new device list");
 				// Send an error packet without regard for errors
 				writer.send(ErrorPkt::recoverable()).ok();
 				state = State::SendDeviceList;
@@ -132,13 +155,13 @@ pub fn serial_task() {
 					"Fatal error {:?} occurred falling back to basic driver control",
 					err
 				);
-                // TODO: Determine proper behaviour?
-                // For now we will just treat fatal errors as recoverable errors anyway
+				// TODO: Determine proper behaviour?
+				// For now we will just treat fatal errors as recoverable errors anyway
 
 				// Send an error packet without regard for errors
 				writer.send(ErrorPkt::recoverable()).ok();
-                state = State::SendDeviceList;
-                continue;
+				state = State::SendDeviceList;
+				continue;
 			}
 		}
 	}
@@ -161,11 +184,15 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 		let port = unsafe { Port::new_unchecked(port_num) };
 		match port.plugged_type() {
 			DeviceType::Motor => {
-				let _ = port.into_motor_default()?.set_encoder_units(EncoderUnits::Ticks)?;
+				let _ = port
+					.into_motor_default()?
+					.set_encoder_units(EncoderUnits::Ticks)?;
 				devices.set_port(port_num as _, PortState::Motor);
 			}
 			DeviceType::Rotation => {
-				let _ = port.into_rotation_sensor(Direction::Forward)?.set_data_rate(5)?;
+				let _ = port
+					.into_rotation_sensor(Direction::Forward)?
+					.set_data_rate(5)?;
 				devices.set_port(port_num as _, PortState::Encoder);
 			}
 			DeviceType::None => {}
