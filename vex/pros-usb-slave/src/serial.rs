@@ -182,7 +182,9 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 		let port = unsafe { Port::new_unchecked(port_num) };
 		match port.plugged_type() {
 			DeviceType::Motor => {
-				let _ = port.into_motor_default()?.set_encoder_units(EncoderUnits::Ticks)?;
+				let mut motor = port.into_motor_default()?;
+				motor.set_encoder_units(EncoderUnits::Ticks)?;
+				motor.set_gearing(Gearset::Green)?;
 				devices.set_port(port_num as _, PortState::Motor);
 			}
 			DeviceType::Rotation => {
@@ -412,6 +414,7 @@ fn source(devices: &Devices) -> Result<StatusPkt, Error> {
 			device.get_current_draw()?,
 			device.get_voltage()?,
 			device.get_temperature()? as _,
+			device.get_actual_velocity()? as _,
 		);
 
 		pkt.set_encoder(motor, (device.get_position()? * 100.0) as _);
@@ -423,15 +426,19 @@ fn source(devices: &Devices) -> Result<StatusPkt, Error> {
 
 fn sink(pkt: ControlPkt) -> Result<(), DeviceError> {
 	// Set the motor voltages
-	for (port, power) in pkt.motor_powers() {
+	for (port, power, is_velocity) in pkt.motor_powers() {
 		let mut motor = Motor {
 			port: unsafe { Port::new_unchecked(port) },
 		};
-		motor.move_voltage(power)?;
+		if is_velocity {
+			motor.move_velocity(power as _)?;
+		} else {
+			motor.move_voltage(power)?;
+		}
 	}
 	// Set the triport pins
 	for i in 0..8 {
-		let active = pkt.triport_pins >> 1 & 0x01 == 1;
+		let active = pkt.triport_pins >> i & 0x01 == 1;
 		let triport = unsafe { TriPort::new_unchecked(i + 1, None).into_digital_out().ok() };
 		if let Some(mut port) = triport {
 			port.write(active);

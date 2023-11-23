@@ -45,11 +45,12 @@ pub mod device {
 		}
 	}
 
-	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+	#[derive(Debug, Default, Clone, Copy, PartialEq)]
 	pub struct MotorState {
 		pub current: u32,
 		pub voltage: i32,
 		pub temperature: i32,
+		pub velocity: f32,
 	}
 
 	// This should match the bitflags as defined within pros-rs
@@ -95,11 +96,12 @@ pub mod device {
 	}
 
 	impl MotorState {
-		pub fn new(current: u32, voltage: i32, temperature: f32) -> Self {
+		pub fn new(current: u32, voltage: i32, temperature: f32, velocity: f32) -> Self {
 			Self {
 				current,
 				voltage,
 				temperature: (temperature * 10.0) as i32,
+				velocity,
 			}
 		}
 
@@ -116,9 +118,13 @@ pub mod device {
 				current: (values.0 as f32 * (2_500.0 / 255.0)) as _,
 				voltage: (values.1 as f32 * (12_000.0 / 127.0)) as _,
 				temperature: (values.2 as f32 * 700.0) as _,
+				velocity: 0.0,
 			}
 		}
 	}
+
+	// Bullshit it
+	impl core::cmp::Eq for MotorState {}
 }
 
 /// An enum that can contain any packet type and can generically deserialise a
@@ -222,6 +228,8 @@ pub struct StatusPkt {
 pub struct ControlPkt {
 	// The power for the motors
 	powers: [Option<i16>; 20],
+	// If the power is a velocity or voltage
+	is_velocity: u32,
 	/// Whether each triport pin should be set to HIGH or LOW
 	pub triport_pins: u8,
 }
@@ -373,7 +381,7 @@ impl StatusPkt {
 	}
 
 	const fn packet_size(encoders: usize, motors: usize) -> usize {
-		1 + 1 + 6 + size_of::<i32>() * encoders + (size_of::<i8>() * 3) * motors
+		1 + 1 + 6 + size_of::<i32>() * encoders + (size_of::<i8>() * 3 + size_of::<f32>()) * motors
 	}
 }
 
@@ -385,28 +393,45 @@ impl ControlPkt {
 
 		for (i, port) in devices.ports.iter().enumerate() {
 			if port.is_motor() {
-				pkt.set_power(i + 1, 0);
+				pkt.set_power(i + 1, 0, false);
 			}
 		}
 
 		pkt
 	}
 
-	pub fn motor_powers(&self) -> impl Iterator<Item = (u8, i16)> + '_ {
+	fn is_velocity(&self, port: u8) -> bool {
+		self.is_velocity & (0x1 << (port - 1) as u32) != 0
+	}
+
+	pub fn motor_powers(&self) -> impl Iterator<Item = (u8, i16, bool)> + '_ {
 		self.powers
 			.iter()
 			.enumerate()
 			.filter(|(_, p)| p.is_some())
-			.map(|(i, p)| ((i + 1) as u8, p.unwrap()))
+			.map(|(i, p)| {
+				let port = (i + 1) as u8;
+				let motor = p.unwrap();
+				let is_velocity = self.is_velocity(port);
+				(port, motor, is_velocity)
+			})
 	}
 
-	pub fn set_power(&mut self, port: usize, power: i16) {
+	pub fn set_power(&mut self, port: usize, power: i16, is_velocity: bool) {
 		assert!(port >= 1 && port <= 20);
 		self.powers[port - 1] = Some(power);
+
+		let bit = 0x1 << (port - 1) as u32;
+		// clear bit
+		self.is_velocity &= !bit;
+		// optionally set it
+		if is_velocity {
+			self.is_velocity |= bit;
+		}
 	}
 
 	const fn packet_size(motors: usize) -> usize {
-		1 + size_of::<i16>() * motors + size_of::<u8>() * 1
+		1 + size_of::<i16>() * motors + size_of::<u32>() + size_of::<u8>()
 	}
 }
 
@@ -524,6 +549,9 @@ impl Packet for StatusPkt {
 				.append(s.1.to_be_bytes())?
 				.append(s.2.to_be_bytes())?;
 		}
+		for state in self.motor_states.iter().filter_map(|p| *p) {
+			out = out.append(state.velocity.to_be_bytes())?;
+		}
 
 		Ok(out.finish())
 	}
@@ -557,6 +585,12 @@ impl Packet for StatusPkt {
 			let v3 = bytes.read_i8();
 			pkt.set_motor_state(port, MotorState::quantise_inverse((v1, v2, v3)));
 		}
+		for port in devices.iter(PortState::is_motor) {
+			let vel = f32::from_bits(bytes.read_u32());
+			let mut state = pkt.get_motor_state(port).unwrap();
+			state.velocity = vel;
+			pkt.set_motor_state(port, state);
+		}
 
 		debug_assert!(bytes.is_empty());
 		Ok(pkt)
@@ -576,6 +610,7 @@ impl Packet for ControlPkt {
 		let mut out =
 			BufWriter::new(buffer, Error::BufferOverrun).append(Self::packet_id().to_be_bytes())?;
 
+		out = out.append(self.is_velocity.to_be_bytes())?;
 		for power in self.powers.iter().filter_map(|p| *p) {
 			out = out.append(power.to_be_bytes())?;
 		}
@@ -594,10 +629,10 @@ impl Packet for ControlPkt {
 		}
 
 		let mut pkt = Self::default();
+		pkt.is_velocity = bytes.read_u32();
 		for port in devices.iter(PortState::is_motor) {
-			pkt.set_power(port, bytes.read_i16());
+			pkt.set_power(port, bytes.read_i16(), pkt.is_velocity(port as _));
 		}
-
 		pkt.triport_pins = bytes.read_u8();
 
 		debug_assert!(bytes.is_empty());
@@ -719,6 +754,12 @@ impl<'a> BufReader<'a> {
 
 	pub fn read_i32(&mut self) -> i32 {
 		let x = i32::from_be_bytes(self.buffer[self.i..self.i + 4].try_into().unwrap());
+		self.i += 4;
+		x
+	}
+
+	pub fn read_u32(&mut self) -> u32 {
+		let x = u32::from_be_bytes(self.buffer[self.i..self.i + 4].try_into().unwrap());
 		self.i += 4;
 		x
 	}
