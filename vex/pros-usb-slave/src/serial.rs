@@ -1,4 +1,4 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use core::ptr;
 
 use pros::prelude::*;
@@ -17,12 +17,31 @@ use protocol::{
 	ControlPkt, Devices, ErrorPkt, GenericPkt, InitPkt, Packet, StatusPkt,
 };
 
+const MOTOR_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub fn serial_task() {
 	let streams = configure_streams();
 	let mut reader = UsbSerialReader::new(streams.0);
 	let mut writer = UsbSerialWriter::new(streams.1);
 
 	let mut state = State::WaitingForInit;
+	let last_packet = Arc::new(Mutex::new(Instant::now()));
+
+	// Spawn the motor halt task
+	{
+		let last_packet = last_packet.clone();
+		pros::rtos::tasks::spawn(move || loop {
+			if last_packet.lock().elapsed() > MOTOR_TIMEOUT {
+				// Stop motors
+				for i in 1..21 {
+					unsafe {
+						pros_sys::motor_move(i, 0);
+					}
+				}
+			}
+			Task::delay(Duration::from_millis(100));
+		});
+	}
 
 	loop {
 		// Don't be greedy, give some time to other tasks as need
@@ -79,6 +98,8 @@ pub fn serial_task() {
 						continue;
 					}
 				};
+
+				*last_packet.lock() = Instant::now();
 
 				match pkt {
 					// Move the motors, etc.

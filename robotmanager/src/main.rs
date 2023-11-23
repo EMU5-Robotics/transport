@@ -1,3 +1,4 @@
+use client::network::Client;
 use common::protocol::*;
 
 use config::Config;
@@ -9,7 +10,8 @@ get-peers:     get a list other connected clients
 set-target:    set a target ID
 get-target:    get current target ID
 recv:          list all unread packets
-connect-rerun: send a Rerun connect command to the current target"#;
+connect-rerun: send a Rerun connect command to the current target
+span-rerun:    spam "connect-rerun" packets to all peers"#;
 
 fn main() -> anyhow::Result<()> {
 	util::create_logger();
@@ -17,6 +19,7 @@ fn main() -> anyhow::Result<()> {
 	let mut config = Config::load_or_create()?;
 	let (addr, conn) = util::quick_connect(config.last_server_addr)?;
 	config.last_server_addr = Some(addr);
+	config.save()?;
 
 	let mut target_id = ClientId::null();
 
@@ -74,6 +77,9 @@ fn main() -> anyhow::Result<()> {
 					eprintln!("{:?}\n", pkt);
 				}
 			}
+			"spam-rerun" => {
+				spam_rerun(&conn);
+			}
 			"help" => {
 				eprintln!("{}", HELP.trim_start());
 			}
@@ -82,9 +88,46 @@ fn main() -> anyhow::Result<()> {
 		}
 	}
 
-	config.save()?;
 	editor.save_history(&Config::history_path()?)?;
 	Ok(())
+}
+
+pub fn spam_rerun(conn: &Client) {
+	let ip = util::local_ip().expect("Failed to get local IP");
+	loop {
+		// Get a list of peers
+		conn.tx
+			.send(Packet {
+				source: conn.id,
+				target: ClientId::server(),
+				timestamp: 0,
+				msg: ControlMessage::PeerListRequest,
+			})
+			.ok();
+		let peers = loop {
+			let pkt = conn.rx.recv().unwrap();
+			match pkt.msg {
+				ControlMessage::PeerList(list) => break list,
+				_ => log::error!("Unexpected message returned: {:?}", pkt),
+			}
+		};
+
+		// Message all peers
+		for peer in &peers {
+			conn.tx
+				.send(Packet {
+					source: conn.id,
+					target: peer.0,
+					timestamp: 0,
+					msg: ControlMessage::ManageMessage(ManageMessage::AnnounceRerunServer(
+						(ip, 9876).into(),
+					)),
+				})
+				.ok();
+		}
+
+		std::thread::sleep(std::time::Duration::from_secs(1));
+	}
 }
 
 mod util {
