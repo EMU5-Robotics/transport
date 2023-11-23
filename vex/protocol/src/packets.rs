@@ -212,8 +212,6 @@ pub struct StatusPkt {
 	/// Indexed as LX, LY, RX, RY. You can use [`ControllerAxis`] to index with a
 	/// meaningful name.
 	pub controller_axes: [i8; 4],
-	/// Currently selected autonomous program
-	pub auton: u8,
 	/// The position of each encoder that is present
 	encoder_positions: [Option<i32>; 20],
 	/// The state of each motor that is present
@@ -263,7 +261,6 @@ impl Default for StatusPkt {
 			state: CompetitionState::empty(),
 			controller_buttons: ControllerButtons::empty(),
 			controller_axes: [0; 4],
-			auton: 0,
 			encoder_positions: [None; 20],
 			motor_states: [None; 20],
 		}
@@ -527,7 +524,6 @@ impl Packet for StatusPkt {
 				.append(s.1.to_be_bytes())?
 				.append(s.2.to_be_bytes())?;
 		}
-		out = out.append(self.auton.to_be_bytes())?;
 
 		Ok(out.finish())
 	}
@@ -561,7 +557,6 @@ impl Packet for StatusPkt {
 			let v3 = bytes.read_i8();
 			pkt.set_motor_state(port, MotorState::quantise_inverse((v1, v2, v3)));
 		}
-		pkt.auton = bytes.read_u8();
 
 		debug_assert!(bytes.is_empty());
 		Ok(pkt)
