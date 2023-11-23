@@ -3,7 +3,11 @@ use core::ptr;
 
 use pros::prelude::*;
 use pros::{
-	devices::{motor::{Motor, EncoderUnits}, rotation::RotationSensor, Direction},
+	devices::{
+		motor::{EncoderUnits, Motor},
+		rotation::RotationSensor,
+		Direction,
+	},
 	ports::Port,
 };
 
@@ -119,9 +123,7 @@ pub fn serial_task() {
 				}
 			}
 			State::FailureRecovery => {
-				log::warn!(
-					"A recoverable error happened, sending ErrorPkt and new device list"
-				);
+				log::warn!("A recoverable error happened, sending ErrorPkt and new device list");
 				// Send an error packet without regard for errors
 				writer.send(ErrorPkt::recoverable()).ok();
 				state = State::SendDeviceList;
@@ -132,13 +134,13 @@ pub fn serial_task() {
 					"Fatal error {:?} occurred falling back to basic driver control",
 					err
 				);
-                // TODO: Determine proper behaviour?
-                // For now we will just treat fatal errors as recoverable errors anyway
+				// TODO: Determine proper behaviour?
+				// For now we will just treat fatal errors as recoverable errors anyway
 
 				// Send an error packet without regard for errors
 				writer.send(ErrorPkt::recoverable()).ok();
-                state = State::SendDeviceList;
-                continue;
+				state = State::SendDeviceList;
+				continue;
 			}
 		}
 	}
@@ -161,11 +163,15 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 		let port = unsafe { Port::new_unchecked(port_num) };
 		match port.plugged_type() {
 			DeviceType::Motor => {
-				let _ = port.into_motor_default()?.set_encoder_units(EncoderUnits::Ticks)?;
+				let _ = port
+					.into_motor_default()?
+					.set_encoder_units(EncoderUnits::Ticks)?;
 				devices.set_port(port_num as _, PortState::Motor);
 			}
 			DeviceType::Rotation => {
-				let _ = port.into_rotation_sensor(Direction::Forward)?.set_data_rate(5)?;
+				let _ = port
+					.into_rotation_sensor(Direction::Forward)?
+					.set_data_rate(5)?;
 				devices.set_port(port_num as _, PortState::Encoder);
 			}
 			DeviceType::None => {}
@@ -396,6 +402,9 @@ fn source(devices: &Devices) -> Result<StatusPkt, Error> {
 		pkt.set_encoder(motor, (device.get_position()? * 100.0) as _);
 		pkt.set_motor_state(motor, state);
 	}
+
+	// Current autonomous selection
+	pkt.auton = crate::AUTON_PROGRAM.load(core::sync::atomic::Ordering::Acquire);
 
 	Ok(pkt)
 }
