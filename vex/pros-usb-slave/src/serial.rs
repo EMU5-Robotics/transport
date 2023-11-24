@@ -184,7 +184,7 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 			DeviceType::Motor => {
 				let mut motor = port.into_motor_default()?;
 				motor.set_encoder_units(EncoderUnits::Ticks)?;
-				motor.set_gearing(Gearset::Green)?;
+				motor.set_gearing(Gearset::Blue)?;
 				devices.set_port(port_num as _, PortState::Motor);
 			}
 			DeviceType::Rotation => {
