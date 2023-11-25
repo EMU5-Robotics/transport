@@ -218,6 +218,8 @@ pub struct StatusPkt {
 	/// Indexed as LX, LY, RX, RY. You can use [`ControllerAxis`] to index with a
 	/// meaningful name.
 	pub controller_axes: [i8; 4],
+	/// Currently selected autonomous program
+	pub auton: u8,
 	/// The position of each encoder that is present
 	encoder_positions: [Option<i32>; 20],
 	/// The state of each motor that is present
@@ -269,6 +271,7 @@ impl Default for StatusPkt {
 			state: CompetitionState::empty(),
 			controller_buttons: ControllerButtons::empty(),
 			controller_axes: [0; 4],
+			auton: 0,
 			encoder_positions: [None; 20],
 			motor_states: [None; 20],
 		}
@@ -381,7 +384,10 @@ impl StatusPkt {
 	}
 
 	const fn packet_size(encoders: usize, motors: usize) -> usize {
-		1 + 1 + 6 + size_of::<i32>() * encoders + (size_of::<i8>() * 3 + size_of::<f32>()) * motors
+		1 + 1
+			+ 6 + size_of::<i32>() * encoders
+			+ (size_of::<i8>() * 3 + size_of::<f32>()) * motors
+			+ 1
 	}
 }
 
@@ -552,6 +558,7 @@ impl Packet for StatusPkt {
 		for state in self.motor_states.iter().filter_map(|p| *p) {
 			out = out.append(state.velocity.to_be_bytes())?;
 		}
+		out = out.append(self.auton.to_be_bytes())?;
 
 		Ok(out.finish())
 	}
@@ -591,6 +598,7 @@ impl Packet for StatusPkt {
 			state.velocity = vel;
 			pkt.set_motor_state(port, state);
 		}
+		pkt.auton = bytes.read_u8();
 
 		debug_assert!(bytes.is_empty());
 		Ok(pkt)

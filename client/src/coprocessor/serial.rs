@@ -75,7 +75,7 @@ impl SerialSpawner {
 			.parity(serialport::Parity::None)
 			.stop_bits(serialport::StopBits::One)
 			.data_bits(serialport::DataBits::Eight)
-			.timeout(Duration::from_secs(1))
+			.timeout(Duration::from_millis(500))
 			.open_native()
 			.and_then(|mut tty| {
 				tty.set_exclusive(false)?;
@@ -115,8 +115,7 @@ impl SerialSpawner {
 		let mut cobs_buf = vec![0; 512].into_boxed_slice();
 
 		let mut state = State::BeginInit;
-		let mut timeout_count = 0;
-		const TIMEOUT: usize = 3;
+		const TIMEOUT: usize = 4;
 
 		'outer: loop {
 			match state {
@@ -160,10 +159,14 @@ impl SerialSpawner {
 								// If a respone is not sent in 3 second than try and send another
 								// init packet
 								if timeout_count >= TIMEOUT {
-									log::info!("InitPkt timeout, retrying");
+									log::info!("DevicesPkt timeout, retrying");
 									state = State::BeginInit;
 									continue 'outer;
 								}
+							}
+							Err(Error::IoErr(err)) => {
+								log::error!("Serial IO Error: {:?}, trying to recover", err);
+								break 'outer;
 							}
 							Err(err) => {
 								log::debug!("Failed to read devices packet: {:?}", err);
@@ -179,8 +182,8 @@ impl SerialSpawner {
 					let pkt = data.copy_control_pkt();
 					match send_pkt(&mut writer, &mut write_buf, &mut cobs_buf, pkt) {
 						Err(err) => {
-							log::error!("Failed to send packet: {:?}", err);
-							return;
+							log::error!("Serial Error: {:?}, trying to recover", err);
+							break 'outer;
 						}
 						_ => {}
 					}
@@ -199,47 +202,50 @@ impl SerialSpawner {
 								None => {}
 							}
 						}
-						Ok(/*pkt @ */ GenericPkt::ErrorPkt(ErrorPkt {
-							err: ErrorType::Recoverable,
-						})) => {
-							// match pkt_cb {
-							// 	Some(ref f) => f(pkt),
-							// 	None => {}
-							// }
+						Ok(
+							pkt @ GenericPkt::ErrorPkt(ErrorPkt {
+								err: ErrorType::Recoverable,
+							}),
+						) => {
+							match pkt_cb {
+								Some(ref f) => f(pkt),
+								None => {}
+							}
 							log::error!("Recoverable error packet sent from secondary controller, waiting for device list");
 							state = State::WaitingForDevices;
 							continue;
 						}
-						Ok(/*pkt @ */ GenericPkt::ErrorPkt(ErrorPkt {
-							err: ErrorType::Fatal,
-						})) => {
-							// match pkt_cb {
-							// 	Some(ref f) => f(pkt),
-							// 	None => {}
-							// }
+						Ok(
+							pkt @ GenericPkt::ErrorPkt(ErrorPkt {
+								err: ErrorType::Fatal,
+							}),
+						) => {
+							match pkt_cb {
+								Some(ref f) => f(pkt),
+								None => {}
+							}
 							log::error!("Fatal error packet sent from secondary controller");
 							state = State::FatalError(Error::SecondaryError);
 							continue;
 						}
 						Ok(pkt) => {
 							// Other packet types are unexpected here
-							log::error!("unexpected packet type incoming: {:?}", pkt);
+							log::error!("Unexpected packet type incoming: {:?}", pkt);
 						}
 						Err(Error::IoErr(err))
 							if matches!(err.kind(), std::io::ErrorKind::TimedOut) =>
 						{
-							timeout_count += 1;
-							// If a respone is not sent in 3 second than try and send another
-							// init packet
-							if timeout_count >= TIMEOUT {
-								log::info!("StatusPkt timeout, retrying");
-								state = State::BeginInit;
-								timeout_count = 0;
-								continue 'outer;
-							}
+							// If a respone is not sent in then try and send another init packet
+							log::warn!("StatusPkt timeout, restart");
+							state = State::BeginInit;
+							continue 'outer;
+						}
+						Err(Error::IoErr(err)) => {
+							log::error!("Serial IO Error: {:?}, trying to recover", err);
+							break 'outer;
 						}
 						Err(err) => {
-							log::error!("Failed to read packet: {:?}", err);
+							log::warn!("Failed to read packet: {:?}", err);
 							// TODO: perhaps try restarting the connection?
 							state = State::BeginInit;
 							continue 'outer;
@@ -251,10 +257,18 @@ impl SerialSpawner {
 					return;
 				}
 			}
-
-			// Wait a bit until we write another packet
-			std::thread::sleep(Duration::from_millis(5));
 		}
+
+		// If we got here this means that an IO error has occurred, attempt to find a port again
+		let port = loop {
+			if let Ok(ports) = find_v5_port() {
+				if let Ok(port) = SerialSpawner::open(&ports.0.port_name) {
+					break port;
+				}
+			}
+			std::thread::sleep(Duration::from_millis(500));
+		};
+		return Self::serial_handler(data, port, None);
 	}
 }
 

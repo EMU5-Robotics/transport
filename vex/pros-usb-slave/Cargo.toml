@@ -9,7 +9,7 @@ cobs = { path = "../../cobs" }
 libc = { version = "0.2", default-features = false }
 log = "0.4.19"
 pros = { git = "https://github.com/serxka/pros-rs" }
-pros-sys = { git = "https://github.com/serxka/pros-sys", tag = "pros-v3.8.1", features = ["global_allocator"] }
+pros-sys = { git = "https://github.com/serxka/pros-sys", tag = "pros-v3.8.2", features = ["global_allocator"] }
 protocol = { path = "../protocol" }
 
 [workspace]
