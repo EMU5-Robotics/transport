@@ -7,8 +7,8 @@ use std::{
 };
 
 use protocol::{
-	self as proto, ControlPkt, Devices, DevicesPkt, ErrorPkt, ErrorType, GenericPkt, InitPkt,
-	Packet, StatusPkt,
+	self as proto, device::Gearbox, ControlPkt, Devices, DevicesPkt, ErrorPkt, ErrorType,
+	GenericPkt, InitPkt, Packet, StatusPkt,
 };
 use serialport::{SerialPortInfo, SerialPortType, TTYPort, UsbPortInfo};
 
@@ -121,13 +121,15 @@ impl SerialSpawner {
 			match state {
 				// Send an InitPkt
 				State::BeginInit => {
-					send_pkt(
-						&mut writer,
-						&mut write_buf,
-						&mut cobs_buf,
-						InitPkt::default(),
-					)
-					.unwrap();
+					let init_pkt = match data.0.gearboxes.lock().unwrap().take() {
+						Some(gearboxes) => {
+							let mut pkt = InitPkt::default();
+							pkt.gearboxes = gearboxes;
+							pkt
+						}
+						None => InitPkt::default(),
+					};
+					send_pkt(&mut writer, &mut write_buf, &mut cobs_buf, init_pkt).unwrap();
 					state = State::WaitingForDevices;
 					continue;
 				}
@@ -178,6 +180,12 @@ impl SerialSpawner {
 					continue;
 				}
 				State::Operating(ref devices) => {
+					// Check for gearboxes
+					if data.0.gearboxes.lock().unwrap().is_some() {
+						state = State::BeginInit;
+						continue;
+					}
+
 					// Write outgoing control packet
 					let pkt = data.copy_control_pkt();
 					match send_pkt(&mut writer, &mut write_buf, &mut cobs_buf, pkt) {
@@ -365,6 +373,7 @@ fn recv_pkt<P: Packet + std::fmt::Debug>(
 pub struct Serial(Arc<SerialInner>);
 
 struct SerialInner {
+	gearboxes: Mutex<Option<[Gearbox; 20]>>,
 	devices: Mutex<DevicesPkt>,
 	status_pkt: Mutex<Option<(Instant, StatusPkt)>>,
 	control_pkt: Mutex<ControlPkt>,
@@ -373,10 +382,15 @@ struct SerialInner {
 impl Serial {
 	pub fn new() -> Self {
 		Self(Arc::new(SerialInner {
+			gearboxes: Mutex::new(None),
 			devices: Mutex::new(DevicesPkt::default()),
 			status_pkt: Mutex::new(None),
 			control_pkt: Mutex::new(ControlPkt::default()),
 		}))
+	}
+
+	pub fn set_gearboxes(&self, gearboxes: [Gearbox; 20]) {
+		*self.0.gearboxes.lock().unwrap() = Some(gearboxes);
 	}
 
 	fn set_devices(&self, pkt: DevicesPkt) {

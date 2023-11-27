@@ -81,6 +81,15 @@ pub mod device {
 		RightY,
 	}
 
+	#[repr(u8)]
+	#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+	pub enum Gearbox {
+		Red = 1,
+		#[default]
+		Green,
+		Blue,
+	}
+
 	impl PortState {
 		pub fn is_rotation(self) -> bool {
 			matches!(self, Self::Encoder)
@@ -194,6 +203,7 @@ impl Default for GenericPkt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitPkt {
 	ack: u8,
+	pub gearboxes: [Gearbox; 20],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,7 +260,10 @@ pub struct ErrorPkt {
 
 impl Default for InitPkt {
 	fn default() -> Self {
-		Self { ack: 0xAA }
+		Self {
+			ack: 0xAA,
+			gearboxes: [Gearbox::default(); 20],
+		}
 	}
 }
 
@@ -459,12 +472,15 @@ impl ErrorPkt {
 
 impl Packet for InitPkt {
 	fn serialise<'a>(&self, buffer: &'a mut [u8]) -> Result<&'a [u8], Error> {
-		let out = BufWriter::new(buffer, Error::BufferOverrun)
-			.append(Self::packet_id().to_be_bytes())?
-			.append(self.ack.to_be_bytes())?
-			.finish();
+		let mut out =
+			BufWriter::new(buffer, Error::BufferOverrun).append(Self::packet_id().to_be_bytes())?;
 
-		Ok(out)
+		out = out.append(self.ack.to_be_bytes())?;
+		for gearbox in self.gearboxes {
+			out = out.append((gearbox as u8).to_be_bytes())?;
+		}
+
+		Ok(out.finish())
 	}
 
 	fn deserialise(_: &Devices, bytes: &[u8]) -> Result<Self, Error> {
@@ -476,8 +492,13 @@ impl Packet for InitPkt {
 			return Err(Error::InvalidPacketId);
 		}
 
-		if bytes.read_u8() != 0xAA {
+		let mut pkt = Self::default();
+		if bytes.read_u8() != pkt.ack {
 			return Err(Error::InvalidValue);
+		}
+		for i in 1..=20 {
+			pkt.gearboxes[i - 1] =
+				Gearbox::try_from(bytes.read_u8()).map_err(|_| Error::InvalidValue)?;
 		}
 
 		debug_assert!(bytes.is_empty());
@@ -485,7 +506,7 @@ impl Packet for InitPkt {
 	}
 
 	fn max_packet_size() -> usize {
-		1 + 1
+		1 + 1 + 20 * size_of::<u8>()
 	}
 
 	fn packet_id() -> u8 {

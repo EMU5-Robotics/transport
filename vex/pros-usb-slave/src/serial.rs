@@ -13,7 +13,7 @@ use pros::{
 
 use protocol::{
 	self as proto,
-	device::{CompetitionState, ControllerButtons, MotorState, PortState},
+	device::{CompetitionState, ControllerButtons, Gearbox, MotorState, PortState},
 	ControlPkt, Devices, ErrorPkt, GenericPkt, InitPkt, Packet, StatusPkt,
 };
 
@@ -26,6 +26,7 @@ pub fn serial_task() {
 
 	let mut state = State::WaitingForInit;
 	let last_packet = Arc::new(Mutex::new(Instant::now()));
+	let mut last_plugged = new_devices_plugged([DeviceType::None; 20]).1;
 
 	// Spawn the motor halt task
 	{
@@ -51,8 +52,9 @@ pub fn serial_task() {
 			// Wait for an incoming init packet
 			State::WaitingForInit => match reader.recieve::<InitPkt>(&Devices::default()) {
 				// If we got an init packet then send out device list out
-				Ok(_) => {
+				Ok(init_pkt) => {
 					log::info!("Got InitPkt");
+					set_gearboxes(init_pkt.gearboxes).ok();
 					state = State::SendDeviceList;
 				}
 				// Ignore the packet otherwise
@@ -99,7 +101,16 @@ pub fn serial_task() {
 					}
 				};
 
+				// Update last packet
 				*last_packet.lock() = Instant::now();
+				// Check for newly plugged devices
+				let (updated, plugged) = new_devices_plugged(last_plugged);
+				last_plugged = plugged;
+				if updated {
+					log::info!("New device plugged in");
+					state = State::FailureRecovery;
+					continue;
+				}
 
 				match pkt {
 					// Move the motors, etc.
@@ -201,6 +212,34 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 	}
 
 	Ok(devices)
+}
+
+fn new_devices_plugged(last: [DeviceType; 20]) -> (bool, [DeviceType; 20]) {
+	let mut plugged = [DeviceType::None; 20];
+	for port_num in 1..=20 {
+		let port = unsafe { Port::new_unchecked(port_num) };
+		plugged[(port_num - 1) as usize] = port.plugged_type();
+	}
+
+	(last != plugged, plugged)
+}
+
+fn set_gearboxes(gearboxes: [Gearbox; 20]) -> Result<(), DeviceError> {
+	for (port, gearbox) in gearboxes.iter().enumerate() {
+		let port = unsafe { Port::new_unchecked(port as u8 + 1) };
+		match port.plugged_type() {
+			DeviceType::Motor => {
+				let mut motor = Motor { port };
+				match gearbox {
+					Gearbox::Blue => motor.set_gearing(Gearset::Blue)?,
+					Gearbox::Green => motor.set_gearing(Gearset::Green)?,
+					Gearbox::Red => motor.set_gearing(Gearset::Red)?,
+				}
+			}
+			_ => {}
+		}
+	}
+	Ok(())
 }
 
 // ptrs aren't send + sync safe by default, this specific type is
