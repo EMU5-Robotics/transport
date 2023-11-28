@@ -121,13 +121,14 @@ impl SerialSpawner {
 			match state {
 				// Send an InitPkt
 				State::BeginInit => {
-					let init_pkt = match data.0.gearboxes.lock().unwrap().take() {
-						Some(gearboxes) => {
-							let mut pkt = InitPkt::default();
-							pkt.gearboxes = gearboxes;
-							pkt
+					let init_pkt = {
+						let mut pkt = InitPkt::default();
+						let mut gearboxes = data.0.gearboxes.lock().unwrap();
+						if gearboxes.0 {
+							pkt.gearboxes = gearboxes.1;
+							gearboxes.0 = false;
 						}
-						None => InitPkt::default(),
+						pkt
 					};
 					send_pkt(&mut writer, &mut write_buf, &mut cobs_buf, init_pkt).unwrap();
 					state = State::WaitingForDevices;
@@ -181,7 +182,7 @@ impl SerialSpawner {
 				}
 				State::Operating(ref devices) => {
 					// Check for gearboxes
-					if data.0.gearboxes.lock().unwrap().is_some() {
+					if data.0.gearboxes.lock().unwrap().0 {
 						state = State::BeginInit;
 						continue;
 					}
@@ -373,7 +374,7 @@ fn recv_pkt<P: Packet + std::fmt::Debug>(
 pub struct Serial(Arc<SerialInner>);
 
 struct SerialInner {
-	gearboxes: Mutex<Option<[Gearbox; 20]>>,
+	gearboxes: Mutex<(bool, [Gearbox; 20])>,
 	devices: Mutex<DevicesPkt>,
 	status_pkt: Mutex<Option<(Instant, StatusPkt)>>,
 	control_pkt: Mutex<ControlPkt>,
@@ -382,15 +383,22 @@ struct SerialInner {
 impl Serial {
 	pub fn new() -> Self {
 		Self(Arc::new(SerialInner {
-			gearboxes: Mutex::new(None),
+			gearboxes: Mutex::new((false, [Gearbox::Green; 20])),
 			devices: Mutex::new(DevicesPkt::default()),
 			status_pkt: Mutex::new(None),
 			control_pkt: Mutex::new(ControlPkt::default()),
 		}))
 	}
 
-	pub fn set_gearboxes(&self, gearboxes: [Gearbox; 20]) {
-		*self.0.gearboxes.lock().unwrap() = Some(gearboxes);
+	pub fn set_gearboxes(&self, gearboxes: impl IntoIterator<Item = (u8, Gearbox)>) {
+		let mut mutex = *self.0.gearboxes.lock().unwrap();
+		for (i, gearbox) in gearboxes {
+			mutex.1[i as usize - 1] = gearbox;
+		}
+	}
+
+	pub fn update_gearboxes(&self) {
+		self.0.gearboxes.lock().unwrap().0 = true;
 	}
 
 	fn set_devices(&self, pkt: DevicesPkt) {
