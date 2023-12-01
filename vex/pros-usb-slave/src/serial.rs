@@ -197,8 +197,11 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 			DeviceType::Motor => {
 				let mut motor = port.into_motor_default()?;
 				motor.set_encoder_units(EncoderUnits::Ticks)?;
-				motor.set_gearing(Gearset::Blue)?;
-				motor.set_brake_mode(BrakeMode::Brake)?;
+				let robot_b = [5, 7, 18, 15, 16, 17];
+				if robot_b.contains(&port_num) {
+					motor.set_brake_mode(BrakeMode::Brake)?;
+				}
+
 				motor.tare_position()?;
 				devices.set_port(port_num as _, PortState::Motor);
 			}
