@@ -200,7 +200,7 @@ fn gather_devices() -> Result<Devices, DeviceError> {
 				let ports /*a*/ = [17, 12, 11, 16, 15, 14, 18, 19];
 				//let ports /*b*/ = [5, 7, 18, 15, 16, 17];
 				if ports.contains(&port_num) {
-					motor.set_brake_mode(BrakeMode::Brake)?;
+					let _ = motor.set_brake_mode(BrakeMode::Brake)?;
 				}
 
 				motor.tare_position()?;

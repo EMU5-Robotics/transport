@@ -770,7 +770,7 @@ dependencies = [
 [[package]]
 name = "pros"
 version = "0.3.0-beta.2"
-source = "git+https://github.com/serxka/pros-rs#0ddc5c2b325e64e0c9244efdd7e4a2614ba931f5"
+source = "git+https://github.com/serxka/pros-rs?rev=ba38e753d6e5f1dfbffdd3936b7ca01e790cca3a#ba38e753d6e5f1dfbffdd3936b7ca01e790cca3a"
 dependencies = [
  "bitflags 2.4.1",
  "libc",
@@ -784,7 +784,7 @@ dependencies = [
 [[package]]
 name = "pros-macros"
 version = "0.1.0"
-source = "git+https://github.com/serxka/pros-rs#0ddc5c2b325e64e0c9244efdd7e4a2614ba931f5"
+source = "git+https://github.com/serxka/pros-rs?rev=ba38e753d6e5f1dfbffdd3936b7ca01e790cca3a#ba38e753d6e5f1dfbffdd3936b7ca01e790cca3a"
 dependencies = [
  "proc-macro2",
  "quote",
