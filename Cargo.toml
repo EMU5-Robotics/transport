@@ -1,10 +1,7 @@
 [workspace]
 resolver = "2"
+
 members = [
-	"client",
-	"server",
-	"cobs",
-	"common",
-	"robotmanager",
-	"vex/protocol",
+	"brain_helper",
+	"robot_serial",
 ]

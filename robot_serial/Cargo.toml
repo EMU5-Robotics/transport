@@ -1,0 +1,10 @@
+[package]
+name = "robot_serial"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+protocol = { path = "../protocol" }
+postcard = { version = "1.0.8", features = ["use-std"] }
+serialport = { version = "4.4.0", features = ["usbportinfo-interface"] }
+log = "0.4.22"
