@@ -99,16 +99,16 @@ pub mod controller {
     pub const NONE: ControllerButtons = ControllerButtons(0);
     pub const A: ControllerButtons = ControllerButtons(1);
     pub const B: ControllerButtons = ControllerButtons(1 << 1);
-    pub const X: ControllerButtons = ControllerButtons(1 << 3);
-    pub const Y: ControllerButtons = ControllerButtons(1 << 4);
-    pub const UP: ControllerButtons = ControllerButtons(1 << 5);
-    pub const DOWN: ControllerButtons = ControllerButtons(1 << 6);
-    pub const LEFT: ControllerButtons = ControllerButtons(1 << 7);
-    pub const RIGHT: ControllerButtons = ControllerButtons(1 << 8);
-    pub const LEFT_TRIGGER_1: ControllerButtons = ControllerButtons(1 << 9);
-    pub const LEFT_TRIGGER_2: ControllerButtons = ControllerButtons(1 << 10);
-    pub const RIGHT_TRIGGER_1: ControllerButtons = ControllerButtons(1 << 11);
-    pub const RIGHT_TRIGGER_2: ControllerButtons = ControllerButtons(1 << 12);
+    pub const X: ControllerButtons = ControllerButtons(1 << 2);
+    pub const Y: ControllerButtons = ControllerButtons(1 << 3);
+    pub const UP: ControllerButtons = ControllerButtons(1 << 4);
+    pub const DOWN: ControllerButtons = ControllerButtons(1 << 5);
+    pub const LEFT: ControllerButtons = ControllerButtons(1 << 6);
+    pub const RIGHT: ControllerButtons = ControllerButtons(1 << 7);
+    pub const LEFT_TRIGGER_1: ControllerButtons = ControllerButtons(1 << 8);
+    pub const LEFT_TRIGGER_2: ControllerButtons = ControllerButtons(1 << 9);
+    pub const RIGHT_TRIGGER_1: ControllerButtons = ControllerButtons(1 << 10);
+    pub const RIGHT_TRIGGER_2: ControllerButtons = ControllerButtons(1 << 11);
 }
 
 impl core::ops::BitOr for ControllerButtons {
