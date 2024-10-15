@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-protocol = { path = "../protocol/" }
-vex-sdk = "0.18.0"
+protocol = { path = "../protocol/", features = [ "vexide" ] }
+vexide = "0.4.1"
+vex-sdk = "0.21.0"

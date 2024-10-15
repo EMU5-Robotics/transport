@@ -1,6 +1,12 @@
 #![no_std]
 pub use protocol;
 
+pub use vexide;
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 use protocol::*;
 const MAX_COBS_PACKET_SIZE: usize = 500;
 
@@ -34,6 +40,16 @@ pub fn read_pkt_serial() -> Option<ToBrain> {
     }
 
     postcard::from_bytes_cobs(&mut buf).ok()
+}
+pub fn read_pkts_serial() -> Option<Vec<ToBrain>> {
+    let mut vec = Vec::new();
+    while unsafe { vex_sdk::vexSerialPeekChar(SERIAL_CHANNEL_STDIO) != -1 } {
+        let Some(pkt) = read_pkt_serial() else {
+            return None;
+        };
+        vec.push(pkt);
+    }
+    Some(vec)
 }
 pub fn write_pkt_serial(pkt: ToRobot) -> bool {
     let mut buf = [0u8; MAX_COBS_PACKET_SIZE];

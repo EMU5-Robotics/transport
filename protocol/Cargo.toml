@@ -6,3 +6,8 @@ edition = "2021"
 [dependencies]
 postcard = "1.0"
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+vexide = { version = "0.4.1", optional = true }
+
+[features]
+default = []
+vexide = ["dep:vexide"]
