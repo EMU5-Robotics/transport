@@ -7,39 +7,33 @@ pub use serde::{Deserialize, Serialize};
 extern crate alloc;
 
 pub mod packet {
-    use crate::DevicesList;
+    use crate::*;
 
-    use serde::{Deserialize, Serialize};
-    #[derive(Serialize, Deserialize, Debug, PartialEq)]
-    #[allow(clippy::large_enum_variant)]
-    pub enum ToBrain {
-        RequestDeviceInfo,
-        RequestControllerInfo,
-        RequestCompState,
-        RequestEncoderState,
-        SetMotors([crate::MotorControl; 21]),
-        SetMotorGearsets([crate::GearSetChange; 21]),
-        Ping(alloc::vec::Vec<u8>),
+    #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone)]
+    pub struct ToBrain {
+        pub set_motors: [crate::MotorControl; 21],
+        pub set_motor_gearsets: [crate::GearSetChange; 21],
     }
 
-    #[derive(Serialize, Deserialize, Debug, PartialEq)]
-    #[allow(clippy::large_enum_variant)]
-    pub enum ToRobot {
-        DevicesList(DevicesList),
-        ControllerState(crate::ControllerState),
-        EncoderState([crate::EncoderState; 21]),
-        CompState(crate::CompState),
-        Pong(alloc::vec::Vec<u8>),
+    #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone)]
+    pub struct ToRobot {
+        pub device_list: Option<DevicesList>,
+        pub controller_state: Option<ControllerState>,
+        pub encoder_state: [EncoderState; 21],
+        pub comp_state: CompState,
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[repr(u8)]
+#[derive(Default, Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum CompState {
+    #[default]
+    Disabled,
     Driver,
     Auton,
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct DevicesList {
     pub smart_ports: [PortState; 21],
     pub adi_ports: [AdiPortState; 8],
@@ -55,7 +49,7 @@ impl DevicesList {
 }
 
 #[repr(u8)]
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum PortState {
     Motor,
     Encoder,
@@ -63,15 +57,17 @@ pub enum PortState {
     Unplugged,
 }
 #[repr(u8)]
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum AdiPortState {
     Other,
     Unplugged,
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[repr(packed)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub struct Triports(u8);
 
+#[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone, Copy)]
 pub enum EncoderState {
     #[default]
@@ -79,20 +75,20 @@ pub enum EncoderState {
     Radians(f64),
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct Status {
     pub state: CompetitionState,
     pub controller_buttons: CompetitionState,
     pub selected_auton_program: u8,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct ControllerState {
     pub buttons: ControllerButtons,
     pub axis: [f64; 4],
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone, Copy)]
 pub struct ControllerButtons(u16);
 pub mod controller {
     use crate::ControllerButtons;
@@ -145,9 +141,10 @@ impl core::ops::BitXorAssign for ControllerButtons {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub struct CompetitionState(u8);
 
+#[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone, Copy)]
 pub enum MotorControl {
     #[default]
@@ -159,6 +156,7 @@ pub enum MotorControl {
     Velocity(i32),
 }
 
+#[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone, Copy)]
 pub enum GearSetChange {
     #[default]

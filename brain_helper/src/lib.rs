@@ -8,7 +8,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use protocol::*;
-const MAX_COBS_PACKET_SIZE: usize = 500;
+const MAX_COBS_PACKET_SIZE: usize = 2047;
 
 // see https://github.com/vexide/vex-sdk/blob/main/src/serial.rs
 const SERIAL_CHANNEL_STDIO: u32 = 1;
@@ -41,12 +41,17 @@ pub fn read_pkt_serial() -> Option<ToBrain> {
 
     postcard::from_bytes_cobs(&mut buf).ok()
 }
+
 pub fn write_pkt_serial(pkt: ToRobot) -> bool {
     let mut buf = [0u8; MAX_COBS_PACKET_SIZE];
 
     let Ok(slice) = postcard::to_slice_cobs(&pkt, &mut buf) else {
         return false;
     };
+
+    if unsafe { vex_sdk::vexSerialWriteFree(SERIAL_CHANNEL_STDIO) < slice.len() as i32 } {
+        return false;
+    }
 
     unsafe {
         if vex_sdk::vexSerialWriteBuffer(SERIAL_CHANNEL_STDIO, slice.as_ptr(), slice.len() as u32)
