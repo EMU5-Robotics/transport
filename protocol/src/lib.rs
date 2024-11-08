@@ -13,6 +13,7 @@ pub mod packet {
     pub struct ToBrain {
         pub set_motors: [crate::MotorControl; 21],
         pub set_motor_gearsets: [crate::GearSetChange; 21],
+        pub set_triports: [crate::ConfigureAdiPort; 8],
     }
 
     #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -33,7 +34,7 @@ pub enum CompState {
     Auton,
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct DevicesList {
     pub smart_ports: [PortState; 21],
     pub adi_ports: [AdiPortState; 8],
@@ -56,11 +57,26 @@ pub enum PortState {
     Other,
     Unplugged,
 }
+
 #[repr(u8)]
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone, Copy)]
 pub enum AdiPortState {
+    DigitalOut(bool),
+    DigitalIn(Option<bool>),
+    AnalogIn(Option<(u16, f64)>),
+    #[default]
     Other,
-    Unplugged,
+}
+
+#[repr(u8)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone, Copy)]
+pub enum ConfigureAdiPort {
+    #[default]
+    None,
+    DigitalHigh,
+    DigitalLow,
+    DigitalIn,
+    AnalogIn,
 }
 
 #[repr(packed)]
@@ -167,9 +183,12 @@ pub enum GearSetChange {
 }
 
 #[cfg(feature = "vexide")]
-use vexide::devices::smart::{
-    motor::{self, BrakeMode},
-    SmartDeviceType,
+use vexide::devices::{
+    adi::AdiDeviceType,
+    smart::{
+        motor::{self, BrakeMode},
+        SmartDeviceType,
+    },
 };
 
 #[cfg(feature = "vexide")]
@@ -205,6 +224,18 @@ impl From<SmartDeviceType> for PortState {
             SmartDeviceType::None => Self::Unplugged,
             SmartDeviceType::Motor => Self::Motor,
             SmartDeviceType::Rotation => Self::Encoder,
+            _ => Self::Other,
+        }
+    }
+}
+
+#[cfg(feature = "vexide")]
+impl From<AdiDeviceType> for AdiPortState {
+    fn from(v: AdiDeviceType) -> Self {
+        match v {
+            AdiDeviceType::DigitalIn => Self::DigitalIn(None),
+            AdiDeviceType::AnalogIn => Self::AnalogIn(None),
+            AdiDeviceType::DigitalOut => Self::DigitalOut(false),
             _ => Self::Other,
         }
     }
