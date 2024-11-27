@@ -3,7 +3,9 @@ pub const V5_USB_VID: u16 = 0x2888;
 
 pub const MAX_PKT_SIZE: usize = 2047;
 
-pub static LAST_UPDATE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+use std::sync::{Mutex, MutexGuard, TryLockError};
+
+pub static LAST_UPDATE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 pub use protocol;
 
@@ -13,10 +15,27 @@ pub struct BrainMediator {
     partial_read_buffer: [u8; MAX_PKT_SIZE],
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("COBS error: {0}")]
+    Cobs(#[from] postcard::Error),
+    #[error("No packets read")]
+    NoPacketRead,
+    #[error("Failed to lock mutex for LAST_UPDATE")]
+    MutexLock(#[from] TryLockError<MutexGuard<'static, Option<std::time::Instant>>>),
+    #[error("Serial Writing Error: {0}")]
+    SerialWriteError(#[from] std::io::Error),
+    #[error("Brain not found")]
+    BrainNotFound,
+    #[error("Serial Error: {0}")]
+    SerialError(#[from] serialport::Error),
+    #[error("Unreachable code reached {0}")]
+    Unreachable(&'static str),
+}
+
 impl BrainMediator {
-    pub fn new() -> Option<Self> {
-        let port = serialport::available_ports()
-            .unwrap()
+    pub fn new() -> Result<Self, Error> {
+        let port = serialport::available_ports()?
             .into_iter()
             .find(|p| {
                 if let serialport::SerialPortType::UsbPort(serialport::UsbPortInfo {
@@ -31,48 +50,52 @@ impl BrainMediator {
                 } else {
                     false
                 }
-            })?;
+            })
+            .ok_or(Error::BrainNotFound)?;
 
-        let port = serialport::new(port.port_name, 115200)
+        let port = serialport::new(port.port_name, 115_200)
             .stop_bits(serialport::StopBits::One)
             .parity(serialport::Parity::None)
             .data_bits(serialport::DataBits::Eight)
-            .open()
-            .unwrap();
+            .open()?;
 
-        Some(Self {
+        Ok(Self {
             port,
             read_buffer: Vec::new(),
             partial_read_buffer: [0; MAX_PKT_SIZE],
         })
     }
-    pub fn try_read(&mut self) -> Result<Vec<protocol::ToRobot>, Box<dyn std::error::Error>> {
-        let mut pkts = Vec::new();
+    // only read single packet (assume reader can write faster then brain can write)
+    pub fn try_read(&mut self) -> Result<protocol::ToRobot, Error> {
         while self.port.bytes_to_read()? != 0 {
+            // update read buffer
             if let Ok(read) = self.port.read(&mut self.partial_read_buffer) {
                 if read > MAX_PKT_SIZE {
-                    log::warn!("read too big, dropping!");
+                    log::warn!("Read too big, dropping!");
                     continue;
                 } else if read + self.read_buffer.len() > MAX_PKT_SIZE {
+                    log::warn!(
+                        "Total read buffer size exceeds MAX_PKT_SIZE ({MAX_PKT_SIZE}. Clearing"
+                    );
                     self.read_buffer.clear();
                 }
-
                 self.read_buffer.extend(&self.partial_read_buffer[..read]);
-                if let Some(idx) = self.read_buffer.iter().position(|&v| v == 0) {
-                    let tbuf = self.read_buffer.drain(..=idx).collect::<Vec<_>>();
-                    let Ok(v) = postcard::from_bytes_cobs::<protocol::ToRobot>(&mut tbuf.clone())
-                    else {
-                        log::warn!("Parse error with: {tbuf:?}");
-                        continue;
-                    };
+            }
 
-                    pkts.push(v);
-                }
+            // find cobs delimiter and parse that section of the read buffer into a packet
+            if let Some(idx) = self.read_buffer.iter().position(|&e| e == 0) {
+                let temp_buf: Vec<_> = self.read_buffer.drain(..=idx).collect();
+                let Ok(pkt) = postcard::from_bytes_cobs::<protocol::ToRobot>(&mut temp_buf.clone())
+                else {
+                    log::warn!("Parse error with: {temp_buf:?}");
+                    continue;
+                };
+                return Ok(pkt);
             }
         }
-        Ok(pkts)
+        Err(Error::NoPacketRead)
     }
-    pub fn try_write(&mut self, v: &protocol::ToBrain) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn try_write(&mut self, v: &protocol::ToBrain) -> Result<(), Error> {
         let option = &mut *LAST_UPDATE.try_lock()?;
 
         if let Some(time) = option.as_mut() {
@@ -83,7 +106,7 @@ impl BrainMediator {
 
         let data = postcard::to_stdvec_cobs(&v)?;
         if data.len() > MAX_PKT_SIZE {
-            unreachable!();
+            return Err(Error::Unreachable("try_write: data.len() > MAX_PKT_SIZE"));
         }
 
         *option = Some(std::time::Instant::now());

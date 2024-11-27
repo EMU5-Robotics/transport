@@ -8,3 +8,4 @@ protocol = { path = "../protocol" }
 postcard = { version = "1.0.8", features = ["use-std"] }
 serialport = { version = "4.4.0", features = ["usbportinfo-interface"] }
 log = "0.4.22"
+thiserror = "2.0.3"
