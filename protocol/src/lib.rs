@@ -21,6 +21,7 @@ pub mod packet {
         pub device_list: Option<DevicesList>,
         pub controller_state: Option<ControllerState>,
         pub encoder_state: [EncoderState; 21],
+        pub imu_state: [ImuState; 21],
         pub comp_state: CompState,
     }
 }
@@ -54,6 +55,7 @@ impl DevicesList {
 pub enum PortState {
     Motor,
     Encoder,
+    Imu,
     Other,
     Unplugged,
 }
@@ -89,6 +91,17 @@ pub enum EncoderState {
     #[default]
     None,
     Radians(f64),
+}
+
+#[repr(u8)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone, Copy)]
+pub enum ImuState {
+    #[default]
+    None,
+    State {
+        z_rotation: f64,
+        z_rate: f64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
@@ -224,6 +237,7 @@ impl From<SmartDeviceType> for PortState {
             SmartDeviceType::None => Self::Unplugged,
             SmartDeviceType::Motor => Self::Motor,
             SmartDeviceType::Rotation => Self::Encoder,
+            SmartDeviceType::Imu => Self::Imu,
             _ => Self::Other,
         }
     }
