@@ -67,31 +67,31 @@ impl BrainMediator {
     }
     // only read single packet (assume reader can write faster then brain can write)
     pub fn try_read(&mut self) -> Result<protocol::ToRobot, Error> {
-        while self.port.bytes_to_read()? != 0 {
-            // update read buffer
-            if let Ok(read) = self.port.read(&mut self.partial_read_buffer) {
-                if read > MAX_PKT_SIZE {
-                    log::warn!("Read too big, dropping!");
-                    continue;
-                } else if read + self.read_buffer.len() > MAX_PKT_SIZE {
-                    log::warn!(
-                        "Total read buffer size exceeds MAX_PKT_SIZE ({MAX_PKT_SIZE}. Clearing"
-                    );
-                    self.read_buffer.clear();
-                }
-                self.read_buffer.extend(&self.partial_read_buffer[..read]);
-            }
+        let to_read = self.port.bytes_to_read()? as usize;
+        if to_read > MAX_PKT_SIZE {
+            return Err(Error::Unreachable("try_read: to_read > MAX_PKT_SIZE"));
+        }
 
-            // find cobs delimiter and parse that section of the read buffer into a packet
-            if let Some(idx) = self.read_buffer.iter().position(|&e| e == 0) {
-                let temp_buf: Vec<_> = self.read_buffer.drain(..=idx).collect();
-                let Ok(pkt) = postcard::from_bytes_cobs::<protocol::ToRobot>(&mut temp_buf.clone())
-                else {
-                    log::warn!("Parse error with: {temp_buf:?}");
-                    continue;
-                };
-                return Ok(pkt);
+        // update read buffer
+        if let Ok(()) = self
+            .port
+            .read_exact(&mut self.partial_read_buffer[..to_read])
+        {
+            if to_read + self.read_buffer.len() > MAX_PKT_SIZE {
+                log::warn!(
+                    "Total read buffer size exceeds MAX_PKT_SIZE ({MAX_PKT_SIZE}). Clearing"
+                );
+                self.read_buffer.clear();
             }
+            self.read_buffer
+                .extend(&self.partial_read_buffer[..to_read]);
+        }
+
+        // find cobs delimiter and parse that section of the read buffer into a packet
+        if let Some(idx) = self.read_buffer.iter().position(|&e| e == 0) {
+            let temp_buf: Vec<_> = self.read_buffer.drain(..=idx).collect();
+            let pkt = postcard::from_bytes_cobs::<protocol::ToRobot>(&mut temp_buf.clone())?;
+            return Ok(pkt);
         }
         Err(Error::NoPacketRead)
     }
