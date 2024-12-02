@@ -26,13 +26,14 @@ pub mod packet {
     }
 }
 
+// add u8 to represent auton selection
 #[repr(u8)]
 #[derive(Default, Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum CompState {
     #[default]
     Disabled,
     Driver,
-    Auton,
+    Auton(u8),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
