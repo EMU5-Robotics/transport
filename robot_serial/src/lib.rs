@@ -99,7 +99,7 @@ impl BrainMediator {
         let option = &mut *LAST_UPDATE.try_lock()?;
 
         if let Some(time) = option.as_mut() {
-            if time.elapsed() < std::time::Duration::from_micros(6000) {
+            if time.elapsed() < std::time::Duration::from_micros(10000) {
                 return Ok(());
             }
         }
